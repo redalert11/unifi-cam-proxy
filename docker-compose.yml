@@ -1,0 +1,61 @@
+services:
+  unifi-cam-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: unifi-cam-proxy-redalert
+    restart: unless-stopped
+    
+    # Run as the current user to avoid permission issues
+    user: "${UID:-1000}:${GID:-1000}"
+    
+    # Network configuration - uses macvlan for direct network access
+    # This allows the camera proxy to be discoverable on the LAN
+    networks:
+      lan_net:
+        ipv4_address: 192.168.1.40  # Using reserved IP range (192.168.1.40-49)
+    
+    # Environment variables
+    environment:
+      - CAMERA_MODEL=UVC_G4_DOME
+      # Set to 'false' to prevent cluttering settings.json with lastReceived messages
+      - PERSIST_LAST_RECEIVED=false
+      # FFmpeg arguments for video streaming (matches working unifi-cam-proxy-kinda command)
+      # -c:v copy: Copy video stream without re-encoding (fast, efficient)
+      # -an: Disable audio (Frigate re-streams may not have audio or it may cause sync issues)
+      - FFMPEG_ARGS=-c:v copy -an
+      # Video streaming method: 'pipeline' (unifi-cam-proxy-kinda style) or 'direct' (current)
+      - VIDEO_STREAM_METHOD=pipeline
+    
+    # Mount source code for live development
+    volumes:
+      - ./Unifi:/workspace/Unifi
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    
+    # Set working directory to Unifi folder for relative imports
+    working_dir: /workspace/Unifi
+    
+    # Run the main application
+    command: python main.py
+
+# External network created with macvlan
+# IMPORTANT: Recreate the network with your actual settings:
+# 
+# First, remove old network if it exists:
+#   docker network rm lan_net
+#
+# Then create with correct subnet (adjust to match your network):
+#   docker network create -d macvlan \
+#     --subnet=192.168.1.0/24 \
+#     --gateway=192.168.1.1 \
+#     --ip-range=192.168.1.224/27 \
+#     -o parent=eth0 \
+#     lan_net
+#
+# Replace 'eth0' with your actual network interface (use 'ip link' to find it)
+# The ip-range limits IPs to 192.168.1.224-255 to avoid conflicts with DHCP
+networks:
+  lan_net:
+    external: true
+

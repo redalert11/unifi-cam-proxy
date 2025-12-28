@@ -95,15 +95,26 @@ class CameraSettings:
 
     def _update_latest_firmware_version(self, status="GA"):
         """Set settings['firmwareVersion'] to the latest version string (e.g., '5.1.34')."""
-        info = self._fetch_latest_camera_firmware_api(status=status)
-        if not info or not info.get("version"):
-            self.logger.info("Latest camera firmware: unavailable via API")
+        # Only fetch and update if firmwareVersion is not already set
+        existing_version = self.settings.get("firmwareVersion")
+        if existing_version:
+            self.logger.info("Using existing firmware version: %s (skipping API fetch)", existing_version)
             return False
-        version = str(info["version"])
-        if self._set_nested_value("firmwareVersion", version, overwrite_non_dict=True):
-            self.logger.info("Latest camera firmware: %s", version)
-            return True
-        return False
+        
+        try:
+            info = self._fetch_latest_camera_firmware_api(status=status)
+            if not info or not info.get("version"):
+                self.logger.info("Latest camera firmware: unavailable via API")
+                return False
+            version = str(info["version"])
+            if self._set_nested_value("firmwareVersion", version, overwrite_non_dict=True):
+                self.logger.info("Latest camera firmware: %s", version)
+                return True
+            return False
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch latest firmware version: {e}")
+            self.logger.info("Continuing with existing or default firmware version")
+            return False
 
     def _fetch_latest_camera_firmware_api(self, status="GA", limit=10, timeout=5.0):
         """Return {'version','url','stage'} for latest Protect *Cameras* release, preferring `status` stage."""

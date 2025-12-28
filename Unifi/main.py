@@ -5,8 +5,9 @@ from utils.logging_utils import setup_logger
 from utils.uptime_utils import increment_uptime
 from Unifi.wss_manager import WssManager
 from Unifi.drivers.camera_factory import build_camera_driver
-import threading, time, logging, signal
 from Unifi.upload_server import start_upload_server
+from Unifi.video_stream_service import VideoStreamService
+import threading, time, logging, signal
 
 def main():
     if not logging.getLogger().handlers:
@@ -63,6 +64,10 @@ def main():
     upload_server_log = setup_logger("upload_server", upload_server_log_level)
     start_upload_server(logger=upload_server_log)
 
+    stream_mgr_log = setup_logger("stream.manager", settings.get("logging.stream.level", logging.INFO))
+    stream_mgr = VideoStreamService(settings, driver, stream_mgr_log)
+    stream_mgr.start()
+
     # WSS manager (waits for token/host)
     wss_mgr = WssManager(settings, token_event, stop_event, wss_log, driver=driver)
     wss_mgr.start()
@@ -75,6 +80,7 @@ def main():
     signal.signal(signal.SIGINT, handle_sig)
     signal.signal(signal.SIGTERM, handle_sig)
     stop_event.wait()
+    stream_mgr.stop()
     main_log.info("Bye!")
 
 if __name__ == "__main__":

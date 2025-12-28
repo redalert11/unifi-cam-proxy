@@ -106,3 +106,19 @@ class CameraDriver:
                 proc.kill()
         except ProcessLookupError:
             pass
+
+    async def build_bootstrap_chunk(self, cfg):
+        raise NotImplementedError
+
+    async def bootstrap_followup_chunks(self, cfg):
+        return []
+
+    async def start_stream_process(self, cfg):
+        raise NotImplementedError
+
+    async def build_avc_sequence_header(self, cfg):
+        """
+        Drivers can override this to supply a precomputed AVC sequence header (FLV tag).
+        Returning None falls back to sniffing the ffmpeg output stream.
+        """
+        return None

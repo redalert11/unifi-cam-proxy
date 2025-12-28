@@ -7,7 +7,8 @@ ffmpeg
 fastapi
 uvicorn
 zeroconf
-websockets
+websockets>=12.0
 flask
 cryptography
 Pillow
+flvlib3@https://github.com/zkonge/flvlib3/archive/master.zip

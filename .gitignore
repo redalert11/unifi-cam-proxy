@@ -19,3 +19,4 @@ test-dev/parser/protect_artifacts
 
 #ignore Debug_Snaps folder
 debug_snaps
+.env

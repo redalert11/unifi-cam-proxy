@@ -19,6 +19,7 @@ Environment knobs (set before running python):
   export WSS_CAPTURE_UNIQUE=false              # capture every message (even duplicates)
   export WSS_CAPTURE_UNIQUE_LIMIT=500          # how many hashes to keep for dedupe
   export WSS_DISABLE_SECURE_TRANSFER=true      # skip secure_transfer subprotocol
+  export PERSIST_LAST_RECEIVED=false           # disable saving lastReceived.* to settings.json
 """
 
 # Debug tip: on the UniFi Protect controller, run `tail -f /volume1/.srv/unifi-protect/logs/cameras.log` to watch camera logs live.
@@ -137,6 +138,307 @@ HELLO_FEATURES = {
     "videoSourceCount": 2,
     "wifi": False,
 }
+
+DEFAULT_CHANGE_VIDEO_PAYLOAD: Dict[str, Any] = {
+    "audio": {
+        "agc": False,
+        "agcTarget": -1,
+        "bitRate": 64000,
+        "channels": 1,
+        "declick": False,
+        "declickThld4Khz": 1e-05,
+        "declickThldAll": 0.0001,
+        "denoise": False,
+        "description": "audio track",
+        "enableTemporalNoiseShaping": False,
+        "enabled": True,
+        "highpass": False,
+        "hpfCutoff": 0,
+        "mode": 0,
+        "name": "",
+        "nsLevel": -1,
+        "quality": 1,
+        "sampleRate": 48000,
+        "type": "aac",
+        "volume": 100,
+    },
+    "cfgver": 4,
+    "chip": {
+        "common": {"vsync_detection_disable": 0},
+        "debug": {"check_disable": 0},
+        "vin0": {
+            "description": "Input src 0",
+            "enabled": True,
+            "hdrMode": 1,
+            "height": 1520,
+            "videoMode": "default",
+            "vinFps": 24,
+            "vsrcCtxSwitch": 0,
+            "vsrcId": 0,
+            "width": 2688,
+        },
+    },
+    "video": {
+        "averageMotionAdaptive": 1,
+        "downScaleMode": 0,
+        "enableHrd": False,
+        "encodeMode": -1,
+        "hallwayMode": -1,
+        "lowDelay": True,
+        "mjpg": {
+            "autoBitrate": False,
+            "autoFps": False,
+            "avSerializer": {
+                "destinations": ["file:///tmp/snap.jpeg"],
+                    "parameters": {
+                        "audioId": 1000,
+                        "enableTimestampsOverlapAvoidance": False,
+                        "streamName": "DEFAULT_3",
+                        "suppressAudio": True,
+                        "suppressVideo": False,
+                        "videoId": 1001,
+                    },
+                "type": "mjpg",
+            },
+            "bitRateCbrAvg": 500000,
+            "bitRateVbrMax": 500000,
+            "bitRateVbrMin": 32000,
+            "bufferId": 0,
+            "debugEncoderType": 0,
+            "description": "JPEG pictures",
+            "enabled": True,
+            "fps": 2,
+            "height": 1512,
+            "idleFps": False,
+            "isCbr": False,
+            "latencyTestSID": 0,
+            "maxFps": 2,
+            "minClientAdaptiveBitRate": 0,
+            "minMotionAdaptiveBitRate": 0,
+            "nMultiplier": None,
+            "name": "mjpg0.0",
+            "quality": 80,
+            "sourceId": 3,
+            "streamId": 3,
+            "streamOrdinal": 3,
+            "type": "mjpg",
+            "validBitrateRangeMax": 6000000,
+            "validBitrateRangeMin": 32000,
+            "width": 2688,
+        },
+        "video1": {
+            "M": 1,
+            "N": 24,
+            "autoBitrate": True,
+            "autoFps": True,
+                "avSerializer": {
+                    "destinations": None,
+                    "parameters": {"streamName": "DEFAULT_0", "withTalkback": True},
+                    "type": "extendedFlv",
+                },
+            "bitRateCbrAvg": 3000000,
+            "bitRateVbrMax": 10000000,
+            "bitRateVbrMin": 32000,
+            "bufferId": 2,
+            "debugEncoderType": 0,
+            "description": "Hi quality video track",
+            "dynamicFpsMode": 2,
+            "enabled": True,
+            "fps": 24,
+            "gopModel": 0,
+            "height": 1512,
+            "horizontalFlip": False,
+            "idleFps": False,
+            "isCbr": False,
+            "latencyTestSID": 0,
+            "maxFps": 24,
+            "minClientAdaptiveBitRate": 0,
+            "minMotionAdaptiveBitRate": 2000000,
+            "nMultiplier": 5,
+            "name": "video0.0",
+            "sourceId": 0,
+            "streamId": 0,
+            "streamOrdinal": 0,
+            "tos": -1,
+            "type": "h264",
+            "validBitrateRangeMargin": 2000000,
+            "validBitrateRangeMax": 12000000,
+            "validBitrateRangeMin": 32000,
+            "validFpsValues": [1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24],
+            "verticalFlip": False,
+            "width": 2688,
+        },
+        "video2": {
+            "M": 1,
+            "N": 24,
+            "autoBitrate": True,
+            "autoFps": True,
+                "avSerializer": {
+                    "destinations": None,
+                    "parameters": {"streamName": "DEFAULT_1", "withTalkback": True},
+                    "type": "extendedFlv",
+                },
+            "bitRateCbrAvg": 200000,
+            "bitRateVbrMax": 300000,
+            "bitRateVbrMin": 32000,
+            "bufferId": 1,
+            "debugEncoderType": 0,
+            "description": "Low quality video track",
+            "dynamicFpsMode": 2,
+            "enabled": True,
+            "fps": 24,
+            "gopModel": 0,
+            "height": 360,
+            "horizontalFlip": False,
+            "idleFps": False,
+            "isCbr": False,
+            "latencyTestSID": 0,
+            "maxFps": 24,
+            "minClientAdaptiveBitRate": 0,
+            "minMotionAdaptiveBitRate": 200000,
+            "nMultiplier": 5,
+            "name": "video0.1",
+            "sourceId": 1,
+            "streamId": 1,
+            "streamOrdinal": 1,
+            "tos": -1,
+            "type": "h264",
+            "validBitrateRangeMargin": 100000,
+            "validBitrateRangeMax": 1000000,
+            "validBitrateRangeMin": 32000,
+            "validFpsValues": [1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24],
+            "verticalFlip": False,
+            "width": 640,
+        },
+        "video3": {
+            "M": 1,
+            "N": 24,
+            "autoBitrate": True,
+            "autoFps": True,
+                "avSerializer": {
+                    "destinations": ["tcp://192.168.0.1:7550?retryInterval=1&connectTimeout=5"],
+                    "parameters": {"opusSampleRate": 24000, "streamName": "DEFAULT_2", "withOpus": True},
+                    "type": "extendedFlv",
+                },
+            "bitRateCbrAvg": 500000,
+            "bitRateVbrMax": 2000000,
+            "bitRateVbrMin": 32000,
+            "bufferId": 3,
+            "debugEncoderType": 0,
+            "description": "Medium quality video track",
+            "dynamicFpsMode": 2,
+            "enabled": True,
+            "fps": 24,
+            "gopModel": 0,
+            "height": 720,
+            "horizontalFlip": False,
+            "idleFps": False,
+            "isCbr": False,
+            "latencyTestSID": 0,
+            "maxFps": 24,
+            "minClientAdaptiveBitRate": 150000,
+            "minMotionAdaptiveBitRate": 750000,
+            "nMultiplier": 5,
+            "name": "video0.2",
+            "sourceId": 2,
+            "streamId": 2,
+            "streamOrdinal": 2,
+            "tos": -1,
+            "type": "h264",
+            "validBitrateRangeMargin": 500000,
+            "validBitrateRangeMax": 3000000,
+            "validBitrateRangeMin": 32000,
+            "validFpsValues": [1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24],
+            "verticalFlip": False,
+            "width": 1280,
+        },
+    },
+}
+
+DEFAULT_CHANGE_ISP_PAYLOAD: Dict[str, Any] = {
+    "aeMode": "auto",
+    "aeTargetPercent": 50,
+    "afExtendRange": 0,
+    "aggressiveAntiFlicker": 0,
+    "autoFlipMirror": 1,
+    "autoFreq": 60,
+    "awbAlgoMethod": "advanced",
+    "brightness": 50,
+    "contrast": 50,
+    "criticalTmpOfProtect": 40,
+    "dZoomCenterX": 50,
+    "dZoomCenterY": 50,
+    "dZoomScale": 0,
+    "dZoomStreamId": 4,
+    "darkAreaCompensateLevel": 0,
+    "denoise": 50,
+    "enable3dnr": 1,
+    "enableExternalIr": 0,
+    "enableMicroTmpProtect": 1,
+    "enablePauseMotion": 0,
+    "flip": 0,
+    "focusMode": "ztrig",
+    "focusPosition": 0,
+    "forceFilterIrSwitchEvents": 0,
+    "hdrMode": "normal",
+    "hue": 50,
+    "icrCustomValue": 2,
+    "icrLightSensorNightThd": 0,
+    "icrSensitivity": 0,
+    "icrSwitchMode": "lux",
+    "irLedLevel": 0,
+    "irLedMode": "manual",
+    "irOnStsBrightness": 0,
+    "irOnStsContrast": 0,
+    "irOnStsDenoise": 0,
+    "irOnStsHue": 0,
+    "irOnStsSaturation": 0,
+    "irOnStsSharpness": 0,
+    "irOnStsWdr": 0,
+    "irOnValBrightness": 50,
+    "irOnValContrast": 50,
+    "irOnValDenoise": 50,
+    "irOnValHue": 50,
+    "irOnValSaturation": 50,
+    "irOnValSharpness": 50,
+    "irOnValWdr": 1,
+    "isDayMode": 1,
+    "lensDistortionCorrection": 1,
+    "masks": {"0": None},
+    "mirror": 0,
+    "queryIrLedStatus": 0,
+    "saturation": 50,
+    "sceneMode": "auto",
+    "sharpness": 50,
+    "touchFocusX": 671,
+    "touchFocusY": 116,
+    "wdr": 1,
+    "zonesAutoFlipMirror": 0,
+    "zoomPosition": 0,
+}
+
+
+def _mac_stream_suffix(settings) -> str:
+    mac = (settings.get("mac") or "").upper().replace(":", "")
+    return mac or "000000000000"
+
+
+def _apply_camera_identity_to_video_payload(payload: Dict[str, Any], settings) -> None:
+    video = payload.get("video")
+    if not isinstance(video, dict):
+        return
+    mac_suffix = _mac_stream_suffix(settings)
+    mapping = {"mjpg": 3, "video1": 0, "video2": 1, "video3": 2}
+    for key, idx in mapping.items():
+        vcfg = video.get(key)
+        if not isinstance(vcfg, dict):
+            continue
+        serializer = vcfg.get("avSerializer")
+        if not isinstance(serializer, dict):
+            continue
+        params = serializer.get("parameters")
+        if isinstance(params, dict):
+            params["streamName"] = f"{mac_suffix}_{idx}"
 HELLO_PROTOCOL_VERSION = 67
 HELLO_REBOOT_TIMEOUT_SEC = 30
 HELLO_UPGRADE_TIMEOUT_SEC = 150
@@ -187,7 +489,7 @@ class WssConfig:
     capture_unique: bool = True
     capture_unique_limit: int = 1000
     snapshot_debug: bool = False
-    snapshot_debug_dir: Path = Path("/workspaces/unifi-cam-proxy/debug_snaps")
+    snapshot_debug_dir: Path = Path("/workspace/Unifi/debug_snaps")
     snapshot_debug_keep: int = 5
 
     @staticmethod
@@ -286,13 +588,20 @@ class CameraMessage:
 
     @classmethod
     def reply_to(cls, in_msg: ControllerMessage, message_id: int, payload: Dict[str, Any]) -> "CameraMessage":
-        status_code = payload.get("statusCode")
-        status = payload.get("status")
+        status_code = None
+        status = None
+        cleaned_payload: Any
+        if isinstance(payload, dict):
+            cleaned_payload = copy.deepcopy(payload)
+            status_code = cleaned_payload.pop("statusCode", None)
+            status = cleaned_payload.pop("status", None)
+        else:
+            cleaned_payload = payload
         return cls(
             function_name=in_msg.function_name,
             message_id=message_id,
             in_response_to=in_msg.message_id,
-            payload=payload,
+            payload=cleaned_payload,
             status_code=status_code,
             status=status,
         )
@@ -325,6 +634,10 @@ SCHEMAS: Dict[str, MessageSchema] = {
     "ChangeTalkbackSettings": MessageSchema(),
     "ChangeAnalyticsSettings": MessageSchema(),
     "ChangeDeviceSettings": MessageSchema(),
+    "ChangeSmartMotionSettings": MessageSchema(),
+    "SmartMotionTest": MessageSchema(),
+    "ChangeAudioEventsSettings": MessageSchema(),
+    "ChangeSmartDetectSettings": MessageSchema(),
     "ChangeClarityZones": MessageSchema(
         payload_optional_keys=["autoMode", "zones"],
     ),
@@ -501,10 +814,26 @@ class BaseHandlers:
             self.settings.update(payload)
         except Exception:
             self.log.exception("Failed to apply payload for %s", fn)
+        
+        # Check if persisting lastReceived messages is disabled
+        persist_last_received = os.getenv("PERSIST_LAST_RECEIVED", "true").lower() not in {"false", "0", "no"}
+        if not persist_last_received:
+            return
+        
         try:
             self.settings.update({f"lastReceived.{fn}": payload})
         except Exception:
             self.log.exception("Failed to persist payload snapshot for %s", fn)
+
+    def _load_last_payload(self, fn: str) -> Optional[Dict[str, Any]]:
+        try:
+            stored = self.settings.get(f"lastReceived.{fn}")
+        except Exception:
+            self.log.exception("Failed to fetch payload snapshot for %s", fn)
+            return None
+        if isinstance(stored, dict):
+            return copy.deepcopy(stored)
+        return None
 
 
 class MaintenanceHandlers(BaseHandlers):
@@ -558,8 +887,56 @@ class MaintenanceHandlers(BaseHandlers):
         if msg.expects_response():
             await self._reply_ok(ws, msg, incoming)
 
+    async def on_update_firmware_request(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        incoming = msg.payload if isinstance(msg.payload, dict) else {}
+        self._persist_incoming_payload(msg.function_name, incoming)
+        
+        # Extract version from the URI (e.g., version=5.1.190)
+        uri = incoming.get("uri", "")
+        new_version = None
+        if "version=" in uri:
+            try:
+                # Parse version from URI query string
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(uri)
+                query_params = parse_qs(parsed.query)
+                if "version" in query_params:
+                    new_version = query_params["version"][0]
+            except Exception as exc:
+                self.log.warning("Failed to parse version from URI: %s", exc)
+        
+        # Update the firmware version to match what the controller expects
+        current_version = self.settings.get("firmwareVersion", "unknown")
+        if new_version:
+            try:
+                self.settings["firmwareVersion"] = new_version
+                self.log.info(
+                    "Firmware version updated: %s -> %s (from controller request)",
+                    current_version,
+                    new_version
+                )
+            except Exception as exc:
+                self.log.error("Failed to update firmwareVersion setting: %s", exc)
+        else:
+            self.log.info(
+                "Firmware update request (proxy mode): uri=%s (version not parsed)",
+                uri
+            )
+        
+        if msg.expects_response():
+            # Reply with success to prevent controller from retrying
+            await self._reply_ok(ws, msg, incoming)
+
 
 class SettingsHandlers(BaseHandlers):
+    async def _reply_with_payload(self, ws, msg, payload: Dict[str, Any]):
+        reply = copy.deepcopy(payload)
+        reply["statusCode"] = 0
+        reply["status"] = "ok"
+        reply["deviceID"] = self._device_id()
+        out = self.protocol.build_reply(msg, reply)
+        await self.protocol.send(ws, out)
+
     async def on_change_osd_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
         if msg.expects_response():
             incoming = msg.payload if isinstance(msg.payload, dict) else {}
@@ -606,8 +983,79 @@ class SettingsHandlers(BaseHandlers):
         if msg.expects_response():
             await self._reply_ok(ws, msg, incoming)
 
+    async def on_change_smart_motion_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        incoming = msg.payload if isinstance(msg.payload, dict) else {}
+        self._persist_incoming_payload(msg.function_name, incoming)
+        if msg.expects_response():
+            defaults = {
+                "mountPosition": "ceiling",
+                "heatmapOverlay": False,
+                "interruptReason": "",
+                "interruptTimeoutMs": 5000,
+                "queueIfDestUnavailable": True,
+                "respondFullSettings": True,
+                "sendEvents": 2,
+                "sendPulse": 2,
+                "serviceWaitTimeMSec": 166,
+                "transactionId": -1,
+                "from": "",
+                "to": "",
+                "responseExpected": True,
+                "functionName": "ChangeSmartMotionSettings",
+                "isBroadcast": False,
+            }
+            reply = copy.deepcopy(defaults)
+            reply.update(incoming)
+            await self._reply_with_payload(ws, msg, reply)
+
+    async def on_smart_motion_test(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        if msg.expects_response():
+            reply = {"payload": msg.payload if isinstance(msg.payload, dict) else None}
+            await self._reply_with_payload(ws, msg, reply)
+
+    async def on_change_audio_events_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        incoming = msg.payload if isinstance(msg.payload, dict) else {}
+        self._persist_incoming_payload(msg.function_name, incoming)
+        if msg.expects_response():
+            reply = {"payload": incoming}
+            await self._reply_with_payload(ws, msg, reply)
+
     async def on_change_video_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
         payload = self._coerce_payload_to_dict(msg.payload)
+        if not payload:
+            cached = self._load_last_payload("ChangeVideoSettings") or {}
+            if not cached:
+                stored_vs = self.settings.get("videoSettings")
+                if isinstance(stored_vs, dict):
+                    raw = stored_vs.get("raw")
+                    if isinstance(raw, dict) and raw:
+                        cached = copy.deepcopy(raw)
+                    else:
+                        fallback = {k: copy.deepcopy(v) for k, v in stored_vs.items() if k != "raw"}
+                        cached = fallback
+            if not cached:
+                cached = copy.deepcopy(DEFAULT_CHANGE_VIDEO_PAYLOAD)
+                _apply_camera_identity_to_video_payload(cached, self.settings)
+                try:
+                    raw_copy = copy.deepcopy(cached)
+                    self.settings.update({"videoSettings.raw": raw_copy})
+                    self.settings.update({"lastReceived.ChangeVideoSettings": copy.deepcopy(cached)})
+                except Exception:
+                    self.log.exception("Failed to seed default ChangeVideoSettings payload")
+            if cached:
+                cached = copy.deepcopy(cached)
+                cached["statusCode"] = 0
+                cached["status"] = "ok"
+                cached["deviceID"] = self._device_id()
+                self.log.debug("ChangeVideoSettings replying with cached payload (keys=%s)", list(cached.keys()))
+                if msg.expects_response():
+                    out = self.protocol.build_reply(msg, cached)
+                    await self.protocol.send(ws, out)
+            else:
+                self.log.warning("ChangeVideoSettings requested current state but no cached payload available")
+                if msg.expects_response():
+                    await self._reply_ok(ws, msg)
+            return
         self._persist_incoming_payload(msg.function_name, payload)
         mode_defaults = {
             "videoMode": payload.get("videoMode") or "default",
@@ -644,35 +1092,33 @@ class SettingsHandlers(BaseHandlers):
 
         self._persist_video_settings(payload, reply_payload)
 
-        if not has_pushable:
-            if msg.expects_response():
-                out = self.protocol.build_reply(msg, reply_payload)
-                await self.protocol.send(ws, out)
-            return
-
-        try:
-            applied = await self.driver.apply_video_settings(payload)
-        except Exception as exc:
-            self.log.error("apply_video_settings failed: %s", exc)
-            if msg.expects_response():
-                error_payload = {
-                    "statusCode": 1,
-                    "status": "error",
-                    "deviceID": self._device_id(),
-                }
-                out = self.protocol.build_reply(msg, error_payload)
-                await self.protocol.send(ws, out)
-            return
-
-        if applied:
-            reply_payload.update(applied)
-
         if msg.expects_response():
             out = self.protocol.build_reply(msg, reply_payload)
             await self.protocol.send(ws, out)
 
     async def on_change_isp_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
         payload = msg.payload if isinstance(msg.payload, dict) else {}
+        if not payload:
+            cached = self._load_last_payload("ChangeIspSettings")
+            if not cached:
+                cached = copy.deepcopy(DEFAULT_CHANGE_ISP_PAYLOAD)
+                try:
+                    self.settings.update({"lastReceived.ChangeIspSettings": copy.deepcopy(DEFAULT_CHANGE_ISP_PAYLOAD)})
+                except Exception:
+                    self.log.exception("Failed to seed default ChangeIspSettings payload")
+            if cached:
+                cached["statusCode"] = 0
+                cached["status"] = "ok"
+                cached["deviceID"] = self._device_id()
+                self.log.debug("ChangeIspSettings replying with cached payload (keys=%s)", list(cached.keys()))
+                if msg.expects_response():
+                    out = self.protocol.build_reply(msg, cached)
+                    await self.protocol.send(ws, out)
+            else:
+                self.log.warning("ChangeIspSettings requested current state but no cached payload available")
+                if msg.expects_response():
+                    await self._reply_ok(ws, msg)
+            return
         self._persist_incoming_payload(msg.function_name, payload)
         try:
             applied = await self.driver.apply_isp_settings(payload)
@@ -712,6 +1158,15 @@ class SettingsHandlers(BaseHandlers):
             self.settings["videoSettings"] = stored
         except Exception:
             self.log.exception("Failed to persist ChangeVideoSettings payload")
+        if "video" in stored:
+            try:
+                self.settings["video"] = stored["video"]
+            except Exception:
+                self.log.exception("Failed to persist active video map")
+        try:
+            self.settings["state.videoReady"] = True
+        except Exception:
+            self.log.exception("Failed to mark video state ready")
 
     def _coerce_payload_to_dict(self, payload: Any) -> Dict[str, Any]:
         if isinstance(payload, (bytes, bytearray)):
@@ -942,6 +1397,17 @@ class AnalyticsHandlers(BaseHandlers):
             self._persist_incoming_payload(msg.function_name, incoming)
             await self._reply_ok(ws, msg, incoming)
 
+    async def on_change_smart_detect_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        incoming = msg.payload if isinstance(msg.payload, dict) else {}
+        self._persist_incoming_payload(msg.function_name, incoming)
+        if msg.expects_response():
+            reply = {"payload": incoming}
+            reply["statusCode"] = 0
+            reply["status"] = "ok"
+            reply["deviceID"] = self._device_id()
+            out = self.protocol.build_reply(msg, reply)
+            await self.protocol.send(ws, out)
+
 
 def build_handler_registry(settings, driver, logger: logging.Logger, protocol: "WssProtocol") -> HandlerRegistry:
     reg = HandlerRegistry()
@@ -956,6 +1422,7 @@ def build_handler_registry(settings, driver, logger: logging.Logger, protocol: "
     reg.register("NetworkStatus", maint.on_network_status)
     reg.register("StopService", maint.on_stop_service)
     reg.register("EnableLogging", maint.on_enable_logging)
+    reg.register("UpdateFirmwareRequest", maint.on_update_firmware_request)
 
     reg.register("ChangeVideoSettings", sets.on_change_video_settings)
     reg.register("ChangeIspSettings", sets.on_change_isp_settings)
@@ -967,11 +1434,15 @@ def build_handler_registry(settings, driver, logger: logging.Logger, protocol: "
     reg.register("UpdateUsernamePassword", sets.on_update_username_password)
     reg.register("ChangeClarityZones", sets.on_change_clarity_zones)
     reg.register("AudioAgentChangeTuning", sets.on_audio_agent_change_tuning)
+    reg.register("ChangeSmartMotionSettings", sets.on_change_smart_motion_settings)
+    reg.register("SmartMotionTest", sets.on_smart_motion_test)
+    reg.register("ChangeAudioEventsSettings", sets.on_change_audio_events_settings)
 
     reg.register("GetRequest", snap.on_get_request)
 
     reg.register("AnalyticsTest", anal.on_analytics_test)
     reg.register("UpdateFaceDBRequest", anal.on_update_face_db_request)
+    reg.register("ChangeSmartDetectSettings", anal.on_change_smart_detect_settings)
 
     return reg
 
@@ -1081,7 +1552,6 @@ class WssProtocol:
         payload = {"statusCode": 0, "status": "ok"}
         out = self.build_reply(msg, payload)
         await self.send(ws, out)
-
 
 # --------------------------------------------------------------------------- #
 # 7. Thread wrapper                                                            #

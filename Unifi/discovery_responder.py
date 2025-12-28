@@ -123,7 +123,14 @@ class DiscoveryResponder:
         sock.bind(("0.0.0.0", self.DISCOVERY_PORT))
 
         listen_host = self.settings.get("host", "0.0.0.0")
-        self.log.info(f"Listening for discovery on {listen_host}:{self.DISCOVERY_PORT}")
+        mac_addr = self.settings.get("mac", "UNKNOWN")
+        self.log.info("=" * 60)
+        self.log.info(f"Discovery Responder Started")
+        self.log.info(f"  Listening on: 0.0.0.0:{self.DISCOVERY_PORT} (UDP)")
+        self.log.info(f"  Camera IP: {listen_host}")
+        self.log.info(f"  Camera MAC: {mac_addr}")
+        self.log.info(f"  Can Adopt: {self.settings.get('canAdopt', True)}")
+        self.log.info("=" * 60)
 
         while True:
             if not self.settings.get("canAdopt", True):
@@ -140,6 +147,7 @@ class DiscoveryResponder:
 
             # Basic match for "\x01\x00\x00\x00" (version=1, cmd=0, length=0)
             if data[:4] == b"\x01\x00\x00\x00":
+                self.log.info(f"Discovery request from {addr[0]}:{addr[1]} - Sending response")
                 try:
                     response = self.build_response()
                 except Exception as e:
