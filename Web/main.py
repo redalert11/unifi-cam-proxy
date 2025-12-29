@@ -2,7 +2,7 @@ import logging
 import sys
 from pathlib import Path
 
-import uvicorn
+import uvicorn # type: ignore
 
 # Ensure repo root is on path so we can import logging_utils regardless of cwd
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -11,8 +11,10 @@ if str(ROOT_DIR) not in sys.path:
 
 try:
     from Unifi.utils.logging_utils import build_uvicorn_log_config
-except ImportError:
-    from utils.logging_utils import build_uvicorn_log_config
+except ImportError as exc:
+    raise ImportError(
+        "Failed to import Unifi.utils.logging_utils. Ensure the workspace root is on PYTHONPATH."
+    ) from exc
 
 try:
     from .app import app  # when executed as a module: python -m Web.main

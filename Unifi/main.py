@@ -1,11 +1,22 @@
-from camera_data.camera_settings import CameraSettings
-from discovery_responder import DiscoveryResponder
-from api_server import VerboseAPIServer
-from utils.logging_utils import setup_logger
-from utils.uptime_utils import increment_uptime
+import logging
+import signal
+import sys
+import threading
+import time
+from pathlib import Path
+
+# Ensure repo root is on path so package imports resolve when running as a script
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from Unifi.camera_data.camera_settings import CameraSettings
+from Unifi.discovery_responder import DiscoveryResponder
+from Unifi.api_server import VerboseAPIServer
+from Unifi.utils.logging_utils import setup_logger
+from Unifi.utils.uptime_utils import increment_uptime
 from Unifi.wss_manager import WssManager
 from Unifi.drivers.camera_factory import build_camera_driver
-import threading, time, logging, signal
 from Unifi.upload_server import start_upload_server
 
 def main():

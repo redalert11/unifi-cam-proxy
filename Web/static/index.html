@@ -236,14 +236,15 @@
       const logBox = document.getElementById('logBox');
       const logPathBadge = document.getElementById('logPathBadge');
       const logDownload = document.getElementById('logDownload');
-      const logLevelSelect = document.getElementById('logLevel');
-      const logFollowBtn = document.getElementById('logFollow');
-      let logFollowTimer = null;
-      const webLogLinesInput = document.getElementById('webLogLines');
-      const webLogRefreshBtn = document.getElementById('webLogRefresh');
-      const webLogBox = document.getElementById('webLogBox');
-      const webLogPathBadge = document.getElementById('webLogPathBadge');
-      const webLogDownload = document.getElementById('webLogDownload');
+        const logLevelSelect = document.getElementById('logLevel');
+        const logFollowBtn = document.getElementById('logFollow');
+        let logFollowTimer = null;
+        let webSettings = {};
+        const webLogLinesInput = document.getElementById('webLogLines');
+        const webLogRefreshBtn = document.getElementById('webLogRefresh');
+        const webLogBox = document.getElementById('webLogBox');
+        const webLogPathBadge = document.getElementById('webLogPathBadge');
+        const webLogDownload = document.getElementById('webLogDownload');
       const webLogLevelSelect = document.getElementById('webLogLevel');
       const webLogFollowBtn = document.getElementById('webLogFollow');
       let webLogFollowTimer = null;
@@ -289,6 +290,7 @@
             status = await pollStatus(5, 400);
             return status;
           },
+          autostartKey: "autostart_go2rtc",
         },
       ];
       const serviceRowRefs = {};
@@ -359,6 +361,14 @@
         });
       }
 
+      async function loadWebSettings() {
+        try {
+          webSettings = await api("/api/settings");
+        } catch {
+          webSettings = {};
+        }
+      }
+
       async function loadLogs({ scroll = false } = {}) {
         if (!logRefreshBtn || !logLinesInput || !logBox) return;
         let lines = parseInt(logLinesInput.value, 10);
@@ -417,6 +427,16 @@
 
       if (logFollowBtn) {
         logFollowBtn.addEventListener("click", toggleLogFollow);
+      }
+
+      async function saveAutostart(def, enabled) {
+        if (!def.autostartKey) return;
+        try {
+          await api("/api/settings", { method: "PUT", body: JSON.stringify({ [def.autostartKey]: enabled }) });
+          webSettings[def.autostartKey] = enabled;
+        } catch (err) {
+          toast(err.message || "Failed to save autostart", "error");
+        }
       }
 
       async function loadWebLogs({ scroll = false } = {}) {
@@ -507,6 +527,11 @@
             <button class="btn btn-sm btn-outline-secondary service-reset" type="button" title="Reload ${def.label}">
               <i class="bi bi-arrow-repeat"></i>
             </button>
+            ${def.autostartKey ? `
+              <div class="form-check form-switch m-0">
+                <input class="form-check-input service-autostart" type="checkbox" role="switch" aria-label="Autostart ${def.label}">
+              </div>
+            ` : ""}
           </div>
         `;
         const toggle = row.querySelector(".service-toggle");
@@ -514,6 +539,7 @@
         const msg = row.querySelector(".service-msg");
         const details = row.querySelector(".service-details");
         const resetBtn = row.querySelector(".service-reset");
+        const autostartToggle = row.querySelector(".service-autostart");
 
         toggle.addEventListener("change", async (e) => {
           const targetOn = e.target.checked;
@@ -559,7 +585,13 @@
           resetBtn.title = "Reload not available";
         }
 
-        serviceRowRefs[def.id] = { row, toggle, badge, msg, details, resetBtn };
+        if (autostartToggle && def.autostartKey) {
+          autostartToggle.addEventListener("change", (e) => {
+            saveAutostart(def, e.target.checked);
+          });
+        }
+
+        serviceRowRefs[def.id] = { row, toggle, badge, msg, details, resetBtn, autostartToggle };
         servicesList.appendChild(row);
       }
 
@@ -582,6 +614,10 @@
           &bull; <i class="bi bi-gear-wide-connected me-1"></i>${cfgText}
           ${streamsText ? `&bull; <i class="bi bi-camera-video me-1"></i>${streamsText}` : ""}
         `;
+        if (ref.autostartToggle && def.autostartKey) {
+          const desired = webSettings[def.autostartKey];
+          ref.autostartToggle.checked = !!desired;
+        }
       }
 
       async function refreshService(def) {
@@ -607,6 +643,7 @@
 
       initServices();
       loadConfig();
+      loadWebSettings().then(() => refreshAllServices());
     </script>
   </body>
 </html>

@@ -5,6 +5,12 @@ from typing import Optional
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi import Depends
+
+try:
+    from Unifi.utils.settings_manager import SettingsManager
+except ImportError:
+    from ..Unifi.utils.settings_manager import SettingsManager  # type: ignore
 
 try:
     from .go2rtc_manager import Go2RTCManager
@@ -22,6 +28,9 @@ static_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 manager = Go2RTCManager()
+
+web_settings_path = Path(__file__).resolve().parent / "data" / "web_settings.json"
+web_settings_store = SettingsManager(web_settings_path, defaults={"autostart_go2rtc": False})
 
 web_log_path = (Path(__file__).resolve().parent.parent / "logs" / "webserver.log").resolve()
 
@@ -48,6 +57,18 @@ def index():
 @app.get("/api/go2rtc/status")
 def go2rtc_status():
     return manager.status().__dict__
+
+
+@app.on_event("startup")
+def go2rtc_autostart():
+    try:
+        if web_settings_store.get("autostart_go2rtc", False):
+            status = manager.status()
+            if not status.running:
+                manager.start()
+    except Exception:
+        # Best-effort autostart
+        pass
 
 
 @app.get("/api/go2rtc/config")
@@ -85,6 +106,19 @@ def go2rtc_reload():
     if not status.running:
         raise HTTPException(status_code=400, detail=status.message or "go2rtc not running")
     return status.__dict__
+
+
+@app.get("/api/settings")
+def web_settings():
+    return web_settings_store.all()
+
+
+@app.put("/api/settings")
+def web_settings_update(settings: dict = Body(...)):
+    if not isinstance(settings, dict):
+        raise HTTPException(status_code=400, detail="settings must be an object")
+    web_settings_store.update(settings)
+    return web_settings_store.all()
 
 
 @app.get("/api/go2rtc/logs")

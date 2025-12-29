@@ -7,6 +7,7 @@ __init__.py
 
 # Ignore local camera settings file (auto-generated, not meant to be version-controlled)
 Unifi/camera_data/settings.json
+Web/data/web_settings.json
 
 # ingnore generate ssl cert
 *.pem

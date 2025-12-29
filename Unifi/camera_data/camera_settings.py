@@ -1,86 +1,85 @@
+import logging
 import json
 import os
-import sys
 import socket
-import threading
-import logging
+import sys
 import urllib.request
 import urllib.error
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from pathlib import Path
+
+from Unifi.utils.settings_manager import SettingsManager
 from .camera_models import CameraModelDatabase
 
+
 class CameraSettings:
+    """
+    Camera-specific settings layered on top of the shared SettingsManager.
+    Handles defaults, platform/sysid enrichment, and network info population.
+    """
+
     def __init__(self, settings_file=None, logger=None):
         self.logger = logger or logging.getLogger(__name__)
-        self.logger.setLevel(logging.NOTSET)
-        self._lock = threading.RLock()
-        self.settings_file = settings_file or os.path.join(os.path.dirname(__file__), "settings.json")
-        self.settings = {}
-        self._dirty = False
+        self.logger.setLevel(logging.INFO)
+        self.settings_file = Path(settings_file or (Path(__file__).parent / "settings.json")).resolve()
+        self.store = SettingsManager(self.settings_file, defaults=self._default_settings())
 
-        self._load_or_initialize()
+        self._ensure_platform_and_sysid()
         self._get_ip_address()
         self._get_mac_address()
-        self._ensure_platform_and_sysid()
         status = os.environ.get("FIRMWARE_STATUS", "GA")  # GA | RC | EA | ALL
         self._update_latest_firmware_version(status=status)
-        if self._dirty:
-            self._save()
 
     def _load_or_initialize(self):
-        if os.path.exists(self.settings_file):
-            with open(self.settings_file, "r") as f:
-                self.settings = json.load(f)
-            self.logger.info("Loaded existing settings from %s", self.settings_file)
-        else:
-            self.logger.info("Creating default settings...")
-            self.settings = self._default_settings()
-            self._save()
+        # Legacy compatibility: retained for callers, delegates to store
+        return self.store.all()
 
     def _ensure_platform_and_sysid(self):
         changed = False
-        if not self.settings.get("marketName"):
+        market = self.store.get("marketName")
+        if not market:
             model = os.environ.get("CAMERA_MODEL", "").strip()
             if not model:
                 self.logger.error("CAMERA_MODEL environment variable is required to set type or platform.")
                 sys.exit(1)
-            changed |= self._set_nested_value("marketName", model)
+            changed |= self.store._set_nested("marketName", model)
+            market = model
 
-        if not self.settings.get("platform"):
-            platform = CameraModelDatabase.get_platform(self.settings["marketName"])
+        if not self.store.get("platform"):
+            platform = CameraModelDatabase.get_platform(market)
             if not platform:
-                self.logger.error(f"Unknown platform for type: {self.settings['marketName']}")
+                self.logger.error(f"Unknown platform for type: {market}")
                 sys.exit(1)
-            changed |= self._set_nested_value("platform", platform)
+            changed |= self.store._set_nested("platform", platform)
 
-        if not self.settings.get("sysid"):
-            sysid = CameraModelDatabase.CameraSysIds.get(self.settings["marketName"])
+        if not self.store.get("sysid"):
+            sysid = CameraModelDatabase.CameraSysIds.get(market)
             if sysid is None:
-                self.logger.error(f"Unknown system ID for type: {self.settings['marketName']}")
+                self.logger.error(f"Unknown system ID for type: {market}")
                 sys.exit(1)
-            changed |= self._set_nested_value("sysid", sysid)
+            changed |= self.store._set_nested("sysid", sysid)
 
-        if not self.settings.get("type"):
-            changed |= self._set_nested_value("type", self.settings["marketName"].replace("_", " "))
+        if not self.store.get("type"):
+            changed |= self.store._set_nested("type", market.replace("_", " "))
 
-        self._dirty |= changed
+        if changed:
+            self.store._save()
 
     def _get_mac_address(self, interface="eth0"):
-        if not self.settings.get("mac"):
+        if not self.store.get("mac"):
             try:
                 with open(f"/sys/class/net/{interface}/address") as f:
                     mac = f.read().strip()
                     if not mac:
                         self.logger.error(f"Empty MAC address for interface '{interface}'.")
                         sys.exit(1)
-                    self._set_nested_value("mac", mac)
+                    self.store.set("mac", mac)
             except FileNotFoundError:
                 self.logger.error(f"Network interface '{interface}' not found.")
                 sys.exit(1)
 
     def _get_ip_address(self):
-        if not self.settings.get("host"):
+        if not self.store.get("host"):
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     s.connect(("8.8.8.8", 80))
@@ -88,7 +87,7 @@ class CameraSettings:
                     if not ip:
                         self.logger.error("Failed to retrieve IP address.")
                         sys.exit(1)
-                    self._set_nested_value("host", ip)
+                    self.store.set("host", ip)
             except Exception as e:
                 self.logger.error(f"Failed to get IP address: {e}")
                 sys.exit(1)
@@ -100,9 +99,13 @@ class CameraSettings:
             self.logger.info("Latest camera firmware: unavailable via API")
             return False
         version = str(info["version"])
-        if self._set_nested_value("firmwareVersion", version, overwrite_non_dict=True):
-            self.logger.info("Latest camera firmware: %s", version)
-            return True
+        try:
+            if self.store._set_nested("firmwareVersion", version, overwrite=True):
+                self.store._save()
+                self.logger.info("Latest camera firmware: %s", version)
+                return True
+        except Exception:
+            return False
         return False
 
     def _fetch_latest_camera_firmware_api(self, status="GA", limit=10, timeout=5.0):
@@ -229,11 +232,10 @@ class CameraSettings:
         Usage:
             mac = settings["uplinkDevice.mac"]
         """
-        with self._lock:
-            value = self._get_nested_value(key, default=None)
-            if value is None and not self.__contains__(key):
-                raise KeyError(key)
-            return value
+        value = self.store.get(key, default=None)
+        if value is None and not self.__contains__(key):
+            raise KeyError(key)
+        return value
 
     def __setitem__(self, key, value):
         """
@@ -242,9 +244,7 @@ class CameraSettings:
         Usage:
             settings["uplinkDevice.mac"] = "00:11:22:33:44:55"
         """
-        with self._lock:
-            if self._set_nested_value(key, value):
-                self._save()
+        self.store.set(key, value)
 
     def __contains__(self, key):
         """
@@ -254,8 +254,7 @@ class CameraSettings:
             if "uplinkDevice.mac" in settings:
                 ...
         """
-        with self._lock:
-            return self._get_nested_value(key, default=None) is not None
+        return self.store.get(key, default=None) is not None
 
     def get(self, key, default=None):
         """
@@ -264,8 +263,7 @@ class CameraSettings:
         Usage:
             mac = settings.get("uplinkDevice.mac", "00:00:00:00:00:00")
         """
-        with self._lock:
-            return self._get_nested_value(key, default)
+        return self.store.get(key, default)
 
     def update(self, updates: dict):
         """
@@ -278,50 +276,7 @@ class CameraSettings:
                 "isUpdating": False
             })
         """
-        with self._lock:
-            changed = False
-            for k, v in updates.items():
-                changed |= self._set_nested_value(k, v)
-            if changed:
-                self._save()
-
-    def _get_nested_value(self, dotted_key, default=None):
-        """Internal helper to retrieve nested values using dot-notation."""
-        keys = dotted_key.split(".")
-        value = self.settings
-        for key in keys:
-            if not isinstance(value, dict) or key not in value:
-                return default
-            value = value[key]
-        return value
-
-    def _save(self):
-        with self._lock:
-            with open(self.settings_file, "w") as f:
-                json.dump(self.settings, f, indent=4)
-            self._dirty = False
-
-    def _set_nested_value(self, dotted_key, value, overwrite_non_dict=False) -> bool:
-        """Set nested value using dot-notation. Return True if it changed."""
-        keys = dotted_key.split(".")
-        d = self.settings
-        for key in keys[:-1]:
-            cur = d.get(key)
-            if cur is None:
-                cur = {}
-                d[key] = cur
-            elif not isinstance(cur, dict):
-                if not overwrite_non_dict:
-                    raise TypeError(f"Cannot descend into non-dict at '{key}' for '{dotted_key}'")
-                cur = {}
-                d[key] = cur
-            d = cur
-        last = keys[-1]
-        if last in d and d[last] == value:
-            return False
-        d[last] = value
-        self._dirty = True
-        return True
+        self.store.update(updates)
 
     def mac_bytes(self, key="mac"):
         """
@@ -332,8 +287,7 @@ class CameraSettings:
             settings.mac_bytes("mac")
             settings.mac_bytes("uplinkDevice.mac")
         """
-        with self._lock:
-            mac_str = self._get_nested_value(key)
+        mac_str = self.store.get(key)
         if not mac_str:
             raise RuntimeError("MAC address is missing in settings.")
         try:
@@ -350,8 +304,7 @@ class CameraSettings:
             settings.ip_bytes("host")
             settings.ip_bytes("wifiConnectionState.apMgmtIp")
         """
-        with self._lock:
-            ip_str = self._get_nested_value(key)
+        ip_str = self.store.get(key)
         if not ip_str:
             raise RuntimeError("IP address is missing in settings.")
         try:
