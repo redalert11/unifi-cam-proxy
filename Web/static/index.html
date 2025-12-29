@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>UniFi Cam Proxy Supervisor</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+    <style>
+      body { font-size: 0.95rem; }
+      .bd-placeholder-img { font-size: 1.125rem; text-anchor: middle; -webkit-user-select: none; -moz-user-select: none; user-select: none; }
+      .toast-container { z-index: 1080; }
+      textarea { font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
+    </style>
+  </head>
+  <body>
+    <header class="navbar navbar-dark sticky-top bg-dark flex-md-nowrap p-0 shadow">
+      <a class="navbar-brand col-md-3 col-lg-2 me-0 px-3 fs-6" href="#">UniFi Cam Proxy Supervisor</a>
+      <button class="navbar-toggler position-absolute d-md-none collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#sidebarMenu" aria-controls="sidebarMenu" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="navbar-nav">
+        <div class="nav-item text-nowrap">
+          <span class="nav-link px-3 text-light">alpha draft</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="container-fluid">
+      <div class="row">
+        <nav id="sidebarMenu" class="col-md-3 col-lg-2 d-md-block bg-body-tertiary sidebar collapse">
+          <div class="position-sticky pt-3">
+            <ul class="nav flex-column">
+              <li class="nav-item">
+                <div class="d-flex align-items-center">
+                  <a class="nav-link active" data-bs-toggle="tab" data-bs-target="#status" href="#status" role="tab">
+                    <i class="bi bi-hdd-network me-2"></i>go2rtc
+                  </a>
+                  <button class="btn btn-sm btn-link text-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#go2rtcSubnav" aria-expanded="true" aria-controls="go2rtcSubnav">
+                    <i class="bi bi-chevron-down"></i>
+                  </button>
+                </div>
+                <div class="collapse show" id="go2rtcSubnav">
+                  <ul class="flex-column ms-3 mb-2 list-unstyled">
+                    <li class="nav-item">
+                      <a class="nav-link small py-1" data-bs-toggle="tab" data-bs-target="#status" href="#status" role="tab">
+                        <i class="bi bi-activity me-1"></i>Status
+                      </a>
+                    </li>
+                    <li class="nav-item">
+                      <a class="nav-link small py-1 nav-link-config" data-bs-toggle="tab" data-bs-target="#config" href="#config" role="tab" data-config-target="#config-go2rtc">
+                        <i class="bi bi-gear me-1"></i>Config
+                      </a>
+                    </li>
+                    <li class="nav-item">
+                      <a class="nav-link small py-1" data-bs-toggle="tab" data-bs-target="#logs" href="#logs" role="tab">
+                        <i class="bi bi-journal-text me-1"></i>Logs
+                      </a>
+                    </li>
+                  </ul>
+                </div>
+              </li>
+              <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#cameras" role="tab">
+                  <i class="bi bi-camera-video me-2"></i>Cameras
+                </a>
+              </li>
+              <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#dashboard" role="tab">
+                  <i class="bi bi-speedometer2 me-2"></i>Dashboard (coming soon)
+                </a>
+              </li>
+              <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#web-logs" role="tab">
+                  <i class="bi bi-terminal me-2"></i>Webserver Logs
+                </a>
+              </li>
+            </ul>
+          </div>
+        </nav>
+
+        <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
+          <div class="tab-content py-3">
+            <div class="tab-pane fade show active" id="status" role="tabpanel">
+              <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+                <h1 class="h4">go2rtc / Status</h1>
+                <span class="badge text-bg-secondary">live</span>
+              </div>
+              <div class="card mb-3">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                  <span><i class="bi bi-diagram-3 me-2"></i>Services</span>
+                  <span class="text-muted small">toggle to start/stop</span>
+                </div>
+                <div class="list-group list-group-flush" id="servicesList">
+                  <!-- rows inserted by JS -->
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="config" role="tabpanel">
+              <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+                <h1 class="h4">go2rtc / Config</h1>
+                <span class="badge text-bg-info">Select a subgroup</span>
+              </div>
+              <div class="row g-3">
+                <div class="col-12">
+                  <div class="card shadow-sm h-100">
+                    <div class="card-header d-flex align-items-center justify-content-between">
+                      <span>go2rtc Config</span>
+                      <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn btn-outline-secondary" id="loadCfgBtn">Load current</button>
+                        <button class="btn btn-primary" id="saveCfgBtn">Save</button>
+                      </div>
+                    </div>
+                    <div class="card-body">
+                      <textarea class="form-control" id="configBox" rows="12" placeholder="# paste go2rtc YAML here"></textarea>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="logs" role="tabpanel">
+              <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+                <h1 class="h4">go2rtc / Logs</h1>
+                <span class="badge text-bg-secondary" id="logPathBadge">path: -</span>
+              </div>
+              <div class="card shadow-sm">
+                <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                  <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-journal-text"></i>
+                    <span class="fw-semibold">go2rtc log tail</span>
+                  </div>
+                  <div class="d-flex align-items-center gap-2">
+                    <label class="form-label mb-0 small text-muted" for="logLines">lines</label>
+                    <input type="number" class="form-control form-control-sm" id="logLines" value="200" min="10" max="2000" step="10" style="width: 90px;">
+                    <select class="form-select form-select-sm" id="logLevel" style="width: 110px;">
+                      <option value="ALL" selected>All levels</option>
+                      <option value="INFO">Info+</option>
+                      <option value="WARN">Warn+</option>
+                      <option value="ERROR">Error</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-secondary" id="logRefresh"><i class="bi bi-arrow-repeat me-1"></i>Refresh</button>
+                    <button class="btn btn-sm btn-outline-success" id="logFollow"><i class="bi bi-play-fill me-1"></i>Follow</button>
+                    <a class="btn btn-sm btn-outline-primary" id="logDownload" href="/api/go2rtc/logs/download" download>
+                      <i class="bi bi-download me-1"></i>Download
+                    </a>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <pre class="bg-body-tertiary p-3 rounded small" style="max-height: 420px; overflow: auto;" id="logBox">Click Refresh to load the log.</pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="web-logs" role="tabpanel">
+              <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+                <h1 class="h4">Webserver Logs</h1>
+                <span class="badge text-bg-secondary" id="webLogPathBadge">path: -</span>
+              </div>
+              <div class="card shadow-sm">
+                <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                  <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-terminal"></i>
+                    <span class="fw-semibold">Webserver log tail</span>
+                  </div>
+                  <div class="d-flex align-items-center gap-2">
+                    <label class="form-label mb-0 small text-muted" for="webLogLines">lines</label>
+                    <input type="number" class="form-control form-control-sm" id="webLogLines" value="200" min="10" max="2000" step="10" style="width: 90px;">
+                    <select class="form-select form-select-sm" id="webLogLevel" style="width: 110px;">
+                      <option value="ALL" selected>All levels</option>
+                      <option value="INFO">Info+</option>
+                      <option value="WARN">Warn+</option>
+                      <option value="ERROR">Error</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-secondary" id="webLogRefresh"><i class="bi bi-arrow-repeat me-1"></i>Refresh</button>
+                    <button class="btn btn-sm btn-outline-success" id="webLogFollow"><i class="bi bi-play-fill me-1"></i>Follow</button>
+                    <a class="btn btn-sm btn-outline-primary" id="webLogDownload" href="/api/web/logs/download" download>
+                      <i class="bi bi-download me-1"></i>Download
+                    </a>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <pre class="bg-body-tertiary p-3 rounded small" style="max-height: 420px; overflow: auto;" id="webLogBox">Click Refresh to load the log.</pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="cameras" role="tabpanel">
+              <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+                <h1 class="h4">Cameras</h1>
+                <span class="badge text-bg-info">Early placeholder</span>
+              </div>
+              <div class="alert alert-info">
+                <i class="bi bi-lightbulb me-2"></i>
+                Camera discovery and stream management UI will live here. Drop details for what you want to see and we'll wire it up next.
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="dashboard" role="tabpanel">
+              <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+                <h1 class="h4">Dashboard</h1>
+                <span class="badge text-bg-warning">Placeholder</span>
+              </div>
+              <p class="text-muted">Instance dashboard and log tails will appear here next.</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+      <div id="toast" class="toast align-items-center text-bg-dark border-0" role="alert">
+        <div class="d-flex">
+          <div class="toast-body"></div>
+          <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      const toastEl = document.getElementById('toast');
+      const bsToast = new bootstrap.Toast(toastEl, { delay: 2200 });
+      const toastBody = toastEl.querySelector('.toast-body');
+
+      const configBox = document.getElementById('configBox');
+
+      const loadCfgBtn = document.getElementById('loadCfgBtn');
+      const saveCfgBtn = document.getElementById('saveCfgBtn');
+      const configNavLink = document.querySelector('.nav-link-config');
+      const configList = document.getElementById('configList');
+      const servicesList = document.getElementById('servicesList');
+      const logLinesInput = document.getElementById('logLines');
+      const logRefreshBtn = document.getElementById('logRefresh');
+      const logBox = document.getElementById('logBox');
+      const logPathBadge = document.getElementById('logPathBadge');
+      const logDownload = document.getElementById('logDownload');
+      const logLevelSelect = document.getElementById('logLevel');
+      const logFollowBtn = document.getElementById('logFollow');
+      let logFollowTimer = null;
+      const webLogLinesInput = document.getElementById('webLogLines');
+      const webLogRefreshBtn = document.getElementById('webLogRefresh');
+      const webLogBox = document.getElementById('webLogBox');
+      const webLogPathBadge = document.getElementById('webLogPathBadge');
+      const webLogDownload = document.getElementById('webLogDownload');
+      const webLogLevelSelect = document.getElementById('webLogLevel');
+      const webLogFollowBtn = document.getElementById('webLogFollow');
+      let webLogFollowTimer = null;
+
+      // Restore saved log level preferences
+      const savedLogLevel = localStorage.getItem("logLevel");
+      if (logLevelSelect && savedLogLevel) {
+        logLevelSelect.value = savedLogLevel;
+      }
+      const savedWebLogLevel = localStorage.getItem("webLogLevel");
+      if (webLogLevelSelect && savedWebLogLevel) {
+        webLogLevelSelect.value = savedWebLogLevel;
+      }
+
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const services = [
+        {
+          id: "go2rtc",
+          label: "go2rtc",
+          fetchStatus: () => api("/api/go2rtc/status"),
+          start: () => api("/api/go2rtc/start", { method: "POST" }),
+          stop: () => api("/api/go2rtc/stop", { method: "POST" }),
+          reset: async () => {
+            const pollStatus = async (tries = 3, delay = 300) => {
+              let last;
+              for (let i = 0; i < tries; i++) {
+                last = await api("/api/go2rtc/status");
+                if (last.running) return last;
+                await sleep(delay);
+              }
+              return last;
+            };
+
+            // Ask go2rtc to reload; if it drops, wait briefly and fall back to start
+            const res = await api("/api/go2rtc/reload", { method: "POST" });
+            await sleep(300);
+            let status = await pollStatus();
+            if (status?.running) return status;
+
+            await api("/api/go2rtc/start", { method: "POST" });
+            await sleep(400);
+            status = await pollStatus(5, 400);
+            return status;
+          },
+        },
+      ];
+      const serviceRowRefs = {};
+
+      function toast(msg, kind = "info") {
+        toastBody.textContent = msg;
+        toastEl.classList.toggle("text-bg-danger", kind === "error");
+        toastEl.classList.toggle("text-bg-dark", kind !== "error");
+        bsToast.show();
+      }
+
+      // When clicking Config in sidebar, ensure the nested go2rtc subgroup is selected and visible
+      if (configNavLink) {
+        configNavLink.addEventListener('shown.bs.tab', () => {
+          const targetId = configNavLink.dataset.configTarget;
+          if (targetId && configList) {
+            const btn = document.querySelector(`${targetId}-tab`);
+            if (btn) new bootstrap.Tab(btn).show();
+            document.querySelector(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      }
+
+      async function api(path, opts = {}) {
+        const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(msg || res.statusText);
+        }
+        if (res.status === 204) return null;
+        const text = await res.text();
+        try { return JSON.parse(text); } catch { return text; }
+      }
+
+      async function loadConfig() {
+        try {
+          const data = await api("/api/go2rtc/config");
+          configBox.value = data.content || "";
+        } catch (err) {
+          toast("No config found yet.", "error");
+          configBox.value = "";
+        }
+      }
+
+      async function saveConfig() {
+        const content = configBox.value;
+        await api("/api/go2rtc/config", { method: "PUT", body: JSON.stringify({ content }) });
+        toast("Config saved");
+      }
+
+      loadCfgBtn.onclick = loadConfig;
+      saveCfgBtn.onclick = async () => {
+        try {
+          await saveConfig();
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      };
+
+      function filterLinesByLevel(lines, level) {
+        if (!Array.isArray(lines) || level === "ALL") return lines;
+        const order = ["DEBUG", "INFO", "WARN", "ERROR"];
+        const minIdx = order.indexOf(level);
+        return lines.filter((line) => {
+          const match = line.match(/\[(DEBUG|INFO|WARN|ERROR)\]/);
+          if (!match) return level === "ERROR" ? false : true;
+          return order.indexOf(match[1]) >= minIdx;
+        });
+      }
+
+      async function loadLogs({ scroll = false } = {}) {
+        if (!logRefreshBtn || !logLinesInput || !logBox) return;
+        let lines = parseInt(logLinesInput.value, 10);
+        if (Number.isNaN(lines)) lines = 200;
+        lines = Math.min(2000, Math.max(10, lines));
+        logLinesInput.value = lines;
+
+        const resetBtn = () => (logRefreshBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Refresh');
+        logRefreshBtn.disabled = true;
+        logRefreshBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        try {
+          const data = await api(`/api/go2rtc/logs?lines=${lines}`);
+          const filtered = filterLinesByLevel(data?.lines || [], logLevelSelect?.value || "ALL");
+          logBox.textContent = filtered.length ? filtered.join("\n") : "(empty)";
+          if (scroll) {
+            logBox.scrollTop = logBox.scrollHeight;
+          }
+          if (logPathBadge && (data?.path_rel || data?.path)) {
+            logPathBadge.textContent = `path: ${data.path_rel || data.path}`;
+            if (logDownload) logDownload.href = "/api/go2rtc/logs/download";
+          }
+        } catch (err) {
+          logBox.textContent = "Failed to load logs.";
+          toast(err.message || "Log fetch failed", "error");
+        } finally {
+          logRefreshBtn.disabled = false;
+          resetBtn();
+        }
+      }
+
+      if (logRefreshBtn) {
+        logRefreshBtn.addEventListener("click", loadLogs);
+      }
+
+      if (logLevelSelect) {
+        logLevelSelect.addEventListener("change", () => {
+          localStorage.setItem("logLevel", logLevelSelect.value);
+          loadLogs();
+        });
+      }
+
+      const toggleLogFollow = () => {
+        const enable = !logFollowTimer;
+        if (enable) {
+          logFollowBtn?.classList.replace("btn-outline-success", "btn-success");
+          logFollowBtn.innerHTML = '<i class="bi bi-stop-fill me-1"></i>Stop';
+          loadLogs({ scroll: true });
+          logFollowTimer = setInterval(() => loadLogs({ scroll: true }), 4000);
+        } else {
+          logFollowBtn?.classList.replace("btn-success", "btn-outline-success");
+          logFollowBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Follow';
+          clearInterval(logFollowTimer);
+          logFollowTimer = null;
+        }
+      };
+
+      if (logFollowBtn) {
+        logFollowBtn.addEventListener("click", toggleLogFollow);
+      }
+
+      async function loadWebLogs({ scroll = false } = {}) {
+        if (!webLogRefreshBtn || !webLogLinesInput || !webLogBox) return;
+        let lines = parseInt(webLogLinesInput.value, 10);
+        if (Number.isNaN(lines)) lines = 200;
+        lines = Math.min(2000, Math.max(10, lines));
+        webLogLinesInput.value = lines;
+
+        const resetBtn = () => (webLogRefreshBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Refresh');
+        webLogRefreshBtn.disabled = true;
+        webLogRefreshBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        try {
+          const data = await api(`/api/web/logs?lines=${lines}`);
+          const filtered = filterLinesByLevel(data?.lines || [], webLogLevelSelect?.value || "ALL");
+          webLogBox.textContent = filtered.length ? filtered.join("\n") : "(empty)";
+          if (scroll) {
+            webLogBox.scrollTop = webLogBox.scrollHeight;
+          }
+          if (webLogPathBadge && (data?.path_rel || data?.path)) {
+            webLogPathBadge.textContent = `path: ${data.path_rel || data.path}`;
+            if (webLogDownload) webLogDownload.href = "/api/web/logs/download";
+          }
+        } catch (err) {
+          webLogBox.textContent = "Failed to load logs.";
+          toast(err.message || "Log fetch failed", "error");
+        } finally {
+          webLogRefreshBtn.disabled = false;
+          resetBtn();
+        }
+      }
+
+      if (webLogRefreshBtn) {
+        webLogRefreshBtn.addEventListener("click", loadWebLogs);
+      }
+
+      if (webLogLevelSelect) {
+        webLogLevelSelect.addEventListener("change", () => {
+          localStorage.setItem("webLogLevel", webLogLevelSelect.value);
+          loadWebLogs();
+        });
+      }
+
+      const toggleWebLogFollow = () => {
+        const enable = !webLogFollowTimer;
+        if (enable) {
+          webLogFollowBtn?.classList.replace("btn-outline-success", "btn-success");
+          webLogFollowBtn.innerHTML = '<i class="bi bi-stop-fill me-1"></i>Stop';
+          loadWebLogs({ scroll: true });
+          webLogFollowTimer = setInterval(() => loadWebLogs({ scroll: true }), 4000);
+        } else {
+          webLogFollowBtn?.classList.replace("btn-success", "btn-outline-success");
+          webLogFollowBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Follow';
+          clearInterval(webLogFollowTimer);
+          webLogFollowTimer = null;
+        }
+      };
+
+      if (webLogFollowBtn) {
+        webLogFollowBtn.addEventListener("click", toggleWebLogFollow);
+      }
+
+      document.querySelectorAll('a[data-bs-toggle="tab"]').forEach((tab) => {
+        tab.addEventListener("shown.bs.tab", (e) => {
+          const target = e.target.getAttribute("data-bs-target");
+          if (target === "#logs" && logFollowTimer) {
+            loadLogs({ scroll: true });
+          } else if (target === "#web-logs" && webLogFollowTimer) {
+            loadWebLogs({ scroll: true });
+          }
+        });
+      });
+
+      function buildServiceRow(def) {
+        const row = document.createElement("div");
+        row.className = "list-group-item d-flex align-items-center justify-content-between gap-3";
+        row.innerHTML = `
+          <div>
+            <div class="fw-semibold">${def.label}</div>
+            <div class="small text-muted service-msg"></div>
+            <div class="small text-muted service-details"></div>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge text-bg-secondary service-badge">loading</span>
+            <div class="form-check form-switch m-0">
+              <input class="form-check-input service-toggle" type="checkbox" role="switch" aria-label="Toggle ${def.label}">
+            </div>
+            <button class="btn btn-sm btn-outline-secondary service-reset" type="button" title="Reload ${def.label}">
+              <i class="bi bi-arrow-repeat"></i>
+            </button>
+          </div>
+        `;
+        const toggle = row.querySelector(".service-toggle");
+        const badge = row.querySelector(".service-badge");
+        const msg = row.querySelector(".service-msg");
+        const details = row.querySelector(".service-details");
+        const resetBtn = row.querySelector(".service-reset");
+
+        toggle.addEventListener("change", async (e) => {
+          const targetOn = e.target.checked;
+          toggle.disabled = true;
+          resetBtn.disabled = true;
+          badge.textContent = "updating…";
+          try {
+            if (targetOn) {
+              await def.start();
+            } else {
+              await def.stop();
+            }
+            const data = await refreshService(def);
+            if (def.onUpdate) def.onUpdate(data);
+          } catch (err) {
+            e.target.checked = !targetOn;
+            toast(`${def.label}: ${err.message}`, "error");
+          } finally {
+            toggle.disabled = false;
+            resetBtn.disabled = false;
+          }
+        });
+
+        resetBtn.addEventListener("click", async () => {
+          if (!def.reset) return;
+          resetBtn.disabled = true;
+          resetBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+          try {
+            await def.reset();
+            const data = await refreshService(def);
+            if (def.onUpdate) def.onUpdate(data);
+            toast(`${def.label} reloaded`);
+          } catch (err) {
+            toast(`${def.label}: ${err.message}`, "error");
+          } finally {
+            resetBtn.disabled = false;
+            resetBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
+          }
+        });
+
+        if (!def.reset) {
+          resetBtn.disabled = true;
+          resetBtn.title = "Reload not available";
+        }
+
+        serviceRowRefs[def.id] = { row, toggle, badge, msg, details, resetBtn };
+        servicesList.appendChild(row);
+      }
+
+      function updateServiceRow(def, data) {
+        const ref = serviceRowRefs[def.id];
+        if (!ref) return;
+        const running = !!data.running;
+        ref.toggle.checked = running;
+        ref.badge.textContent = running ? "running" : "stopped";
+        ref.badge.className = running ? "badge text-bg-success service-badge" : "badge text-bg-secondary service-badge";
+        ref.msg.textContent = "";
+        const pidText = data.pid ? `pid ${data.pid}` : "pid: -";
+        const binText = data.binary_path ? `bin:${data.binary_path}` : "bin:missing";
+        const cfgText = data.config_path ? `config:${data.config_path}${data.config_exists ? "" : " (missing)"}` : "config:missing";
+        const streamsText =
+          data.streams_total != null ? `streams:${data.streams_total}` : "";
+        ref.details.innerHTML = `
+          <i class="bi bi-cpu me-1"></i>${pidText}
+          &bull; <i class="bi bi-hdd-stack me-1"></i>${binText}
+          &bull; <i class="bi bi-gear-wide-connected me-1"></i>${cfgText}
+          ${streamsText ? `&bull; <i class="bi bi-camera-video me-1"></i>${streamsText}` : ""}
+        `;
+      }
+
+      async function refreshService(def) {
+        const data = await def.fetchStatus();
+        updateServiceRow(def, data);
+        if (def.onUpdate) def.onUpdate(data);
+        return data;
+      }
+
+      async function refreshAllServices() {
+        await Promise.all(
+          services.map((def) =>
+            refreshService(def).catch((err) => toast(`${def.label} status failed: ${err.message}`, "error"))
+          )
+        );
+      }
+
+      function initServices() {
+        services.forEach(buildServiceRow);
+        refreshAllServices();
+        setInterval(refreshAllServices, 4000);
+      }
+
+      initServices();
+      loadConfig();
+    </script>
+  </body>
+</html>

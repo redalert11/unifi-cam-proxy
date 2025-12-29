@@ -1,5 +1,6 @@
 # Ignore all Python bytecode cache directories
 __pycache__/
+__init__.py
 
 # Ignore compiled Python bytecode files
 *.pyc
@@ -19,3 +20,9 @@ test-dev/parser/protect_artifacts
 
 #ignore Debug_Snaps folder
 debug_snaps
+
+#ignore go2rtc config folder
+go2rtc/
+
+#ignore logs
+logs/

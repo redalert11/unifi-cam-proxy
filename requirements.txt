@@ -11,3 +11,4 @@ websockets
 flask
 cryptography
 Pillow
+uvicorn

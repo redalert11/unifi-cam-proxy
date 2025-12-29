@@ -5,7 +5,10 @@
 
   "customizations": {
     "vscode": {
-      "extensions": ["ms-python.python"]
+      "extensions": [
+        "ms-python.python",
+        "openai.chatgpt"
+      ]
     }
   },
 
@@ -22,9 +25,5 @@
     "CAMERA_MODEL": "UVC_G4_DOME"
   },
 
-  "postCreateCommand": [
-    "bash",
-    "-lc",
-    "set -e && sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg iputils-ping curl ca-certificates tar tshark openssh-client && pip install -r requirements.txt"
-  ]
+  "postCreateCommand": "bash .devcontainer/post_create.sh"
 }
