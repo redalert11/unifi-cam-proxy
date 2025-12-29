@@ -87,9 +87,14 @@
                 <span class="badge text-bg-secondary">live</span>
               </div>
               <div class="card mb-3">
-                <div class="card-header d-flex align-items-center justify-content-between">
-                  <span><i class="bi bi-diagram-3 me-2"></i>Services</span>
-                  <span class="text-muted small">toggle to start/stop</span>
+                <div class="card-header">
+                  <div class="text-muted small d-grid align-items-center" style="grid-template-columns: 1fr 70px 90px 80px 90px; gap: 0.35rem;">
+                    <div><i class="bi bi-diagram-3 me-2"></i>Services</div>
+                    <div class="text-center">Status</div>
+                    <div class="text-center">Start/Stop</div>
+                    <div class="text-center">Restart</div>
+                    <div class="text-center">Autostart</div>
+                  </div>
                 </div>
                 <div class="list-group list-group-flush" id="servicesList">
                   <!-- rows inserted by JS -->
@@ -512,26 +517,28 @@
 
       function buildServiceRow(def) {
         const row = document.createElement("div");
-        row.className = "list-group-item d-flex align-items-center justify-content-between gap-3";
+        row.className = "list-group-item";
         row.innerHTML = `
-          <div>
-            <div class="fw-semibold">${def.label}</div>
-            <div class="small text-muted service-msg"></div>
-            <div class="small text-muted service-details"></div>
-          </div>
-          <div class="d-flex align-items-center gap-2">
-            <span class="badge text-bg-secondary service-badge">loading</span>
-            <div class="form-check form-switch m-0">
+          <div class="d-grid align-items-center" style="grid-template-columns: 1fr 70px 90px 80px 90px; gap: 0.35rem;">
+            <div>
+              <div class="fw-semibold">${def.label}</div>
+              <div class="small text-muted service-msg"></div>
+              <div class="small text-muted service-details" style="margin-top: 2px;"></div>
+            </div>
+            <span class="badge text-bg-secondary service-badge text-center justify-self-center">loading</span>
+            <div class="form-check form-switch m-0 d-flex justify-content-center">
               <input class="form-check-input service-toggle" type="checkbox" role="switch" aria-label="Toggle ${def.label}">
             </div>
-            <button class="btn btn-sm btn-outline-secondary service-reset" type="button" title="Reload ${def.label}">
-              <i class="bi bi-arrow-repeat"></i>
-            </button>
+            <div class="d-flex justify-content-center">
+              <button class="btn btn-sm btn-outline-secondary service-reset" type="button" title="Reload ${def.label}">
+                <i class="bi bi-arrow-repeat"></i>
+              </button>
+            </div>
             ${def.autostartKey ? `
-              <div class="form-check form-switch m-0">
+              <div class="form-check form-switch m-0 d-flex justify-content-center">
                 <input class="form-check-input service-autostart" type="checkbox" role="switch" aria-label="Autostart ${def.label}">
               </div>
-            ` : ""}
+            ` : '<div class="text-center text-muted small">-</div>'}
           </div>
         `;
         const toggle = row.querySelector(".service-toggle");
