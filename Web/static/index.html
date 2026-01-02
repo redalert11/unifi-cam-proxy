@@ -233,9 +233,9 @@
                       <div class="d-flex gap-2 mb-3">
                         <div class="btn-group btn-group-sm" role="group" aria-label="Camera add mode">
                           <button type="button" class="btn btn-outline-primary active" id="camModeOnvifBtn">ONVIF</button>
+                          <button type="button" class="btn btn-outline-primary" id="camModeTapoBtn">Tapo</button>
                           <button type="button" class="btn btn-outline-primary" id="camModeRtspBtn">Manual RTSP</button>
                         </div>
-                        <span class="text-muted small align-self-center" id="camModeHint">Use ONVIF discovery by default; switch to manual RTSP if needed.</span>
                       </div>
 
                       <div id="camOnvifSection">
@@ -272,6 +272,93 @@
                         </div>
                       </div>
 
+                      <div id="camTapoSection" class="d-none">
+                        <div class="alert alert-warning py-2 small mb-3" role="button" data-bs-toggle="collapse" data-bs-target="#tapoThirdPartySteps" aria-expanded="false" aria-controls="tapoThirdPartySteps" style="cursor: pointer;">
+                          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                            <span><i class="bi bi-info-circle me-2"></i>Enable Third-Party Compatibility in the Tapo app</span>
+                            <span class="text-muted small">Click to show steps</span>
+                          </div>
+                          <div class="collapse mt-2" id="tapoThirdPartySteps">
+                            <ol class="text-muted small mb-0 ps-3">
+                              <li>Open the Tapo app and login</li>
+                              <li>Tap "Me"</li>
+                              <li>Tap "Tapo Lab"</li>
+                              <li>Tap "Third-Party Compatibility"</li>
+                              <li>Tap "Enable"</li>
+                            </ol>
+                          </div>
+                        </div>
+                        <div class="alert alert-warning py-2 small mb-3" role="button" data-bs-toggle="collapse" data-bs-target="#tapoCameraAccountSteps" aria-expanded="false" aria-controls="tapoCameraAccountSteps" style="cursor: pointer;">
+                          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                            <span><i class="bi bi-info-circle me-2"></i>Enable Camera Account on the camera</span>
+                            <span class="text-muted small">Click to show steps</span>
+                          </div>
+                          <div class="collapse mt-2" id="tapoCameraAccountSteps">
+                            <ol class="text-muted small mb-0 ps-3">
+                              <li>Open the Tapo app and login</li>
+                              <li>Select the camera</li>
+                              <li>Open Settings</li>
+                              <li>Open "Advanced Settings"</li>
+                              <li>Tap "Camera Account"</li>
+                              <li>Enable "Camera Account"</li>
+                              <li>Tap Verify your account and set username and password</li>
+                            </ol>
+                          </div>
+                        </div>
+                        <div class="alert alert-warning py-2 small mb-3">
+                          <i class="bi bi-info-circle me-2"></i>Reboot each camera after enabling Third-Party Compatibility or Camera Account
+                        </div>
+                        <div class="row g-2 align-items-end mb-2">
+                          <div class="col-md-5">
+                            <label class="form-label small mb-1">Camera IP</label>
+                            <input class="form-control form-control-sm" id="camTapoHost" placeholder="192.168.0.100">
+                          </div>
+                          <div class="col-md-4">
+                            <label class="form-label small mb-1">App password</label>
+                            <input class="form-control form-control-sm" id="camTapoCloudPass" type="password" placeholder="app password">
+                          </div>
+                        </div>
+                        <div class="row g-2 align-items-end mb-2">
+                          <div class="col-md-4">
+                            <label class="form-label small mb-1">Auth mode</label>
+                            <div class="form-check">
+                              <input class="form-check-input" type="radio" name="camTapoAuthMode" id="camTapoAuthCloud" value="cloud" checked>
+                              <label class="form-check-label small" for="camTapoAuthCloud">Hash cloud password (SHA-256)</label>
+                            </div>
+                            <div class="form-check">
+                              <input class="form-check-input" type="radio" name="camTapoAuthMode" id="camTapoAuthHash" value="hash">
+                              <label class="form-check-label small" for="camTapoAuthHash">Use pre-hashed password</label>
+                            </div>
+                          </div>
+                          <div class="col-md-4">
+                            <label class="form-label small mb-1">Hashed password (MD5/SHA)</label>
+                            <input class="form-control form-control-sm" id="camTapoHash" placeholder="UPPERCASE hash" disabled>
+                          </div>
+                          <div class="col-md-2">
+                            <label class="form-label small mb-1">Username</label>
+                            <input class="form-control form-control-sm" id="camTapoUser" placeholder="admin" value="admin" disabled>
+                          </div>
+                          <div class="col-md-2">
+                            <label class="form-label small mb-1">Subtype</label>
+                            <select class="form-select form-select-sm" id="camTapoSubtype">
+                              <option value="0" selected>HD (0)</option>
+                              <option value="1">VGA (1)</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div class="row g-2 align-items-end mb-2">
+                          <div class="col-md-12">
+                            <label class="form-label small mb-1">Tapo URL preview</label>
+                            <div class="form-control form-control-sm bg-body-tertiary" id="camTapoPreview">Build to preview…</div>
+                          </div>
+                        </div>
+                        <div class="d-flex gap-2 mb-2 flex-wrap">
+                          <button class="btn btn-outline-secondary btn-sm" id="camTapoBuildBtn"><i class="bi bi-wrench-adjustable me-1"></i>Build URL</button>
+                          <button class="btn btn-primary btn-sm d-none" id="camTapoAddBtn"><i class="bi bi-plus-circle me-1"></i>Add stream</button>
+                          <button class="btn btn-outline-primary btn-sm" id="camTapoPersistBtn"><i class="bi bi-save me-1"></i>Save to config & reload</button>
+                          <span class="text-muted small" id="camTapoMsg"></span>
+                        </div>
+                      </div>
                       <div id="camRtspSection">
                       <div class="d-flex justify-content-between align-items-center mb-2">
                         <span class="fw-semibold">Streams</span>
@@ -393,8 +480,10 @@
       const camPersistBtnOnvif = document.getElementById("camPersistBtnOnvif");
       const camPersistBtn = document.getElementById("camPersistBtn");
       const camModeOnvifBtn = document.getElementById("camModeOnvifBtn");
+      const camModeTapoBtn = document.getElementById("camModeTapoBtn");
       const camModeRtspBtn = document.getElementById("camModeRtspBtn");
       const camOnvifSection = document.getElementById("camOnvifSection");
+      const camTapoSection = document.getElementById("camTapoSection");
       const camRtspSection = document.getElementById("camRtspSection");
       const camOnvifScanBtn = document.getElementById("camOnvifScanBtn");
       const camOnvifScanMsg = document.getElementById("camOnvifScanMsg");
@@ -404,6 +493,18 @@
       const camOnvifAddBtn = document.getElementById("camOnvifAddBtn");
       const camOnvifMsg = document.getElementById("camOnvifMsg");
       const camOnvifProfiles = document.getElementById("camOnvifProfiles");
+      const camTapoHost = document.getElementById("camTapoHost");
+      const camTapoCloudPass = document.getElementById("camTapoCloudPass");
+      const camTapoAuthCloud = document.getElementById("camTapoAuthCloud");
+      const camTapoAuthHash = document.getElementById("camTapoAuthHash");
+      const camTapoHash = document.getElementById("camTapoHash");
+      const camTapoUser = document.getElementById("camTapoUser");
+      const camTapoSubtype = document.getElementById("camTapoSubtype");
+      const camTapoPreview = document.getElementById("camTapoPreview");
+      const camTapoBuildBtn = document.getElementById("camTapoBuildBtn");
+      const camTapoAddBtn = document.getElementById("camTapoAddBtn");
+      const camTapoPersistBtn = document.getElementById("camTapoPersistBtn");
+      const camTapoMsg = document.getElementById("camTapoMsg");
       const camStep1Status = document.getElementById("camStep1Status");
       const camProbeBtn = document.getElementById("camProbeBtn");
       const camProbeMsg = document.getElementById("camProbeMsg");
@@ -1063,6 +1164,24 @@
       });
 
       let discoveredOnvif = [];
+      const inferOnvifProfile = (srcObj) => {
+        if (!srcObj || typeof srcObj !== "object") return "";
+        const token = String(srcObj.token || srcObj.profile_token || srcObj.profileToken || srcObj.id || "");
+        const name = String(srcObj.name || "");
+        const profileField = String(srcObj.profile || srcObj.profileType || srcObj.type || srcObj.kind || srcObj.class || "");
+        const combined = `${profileField} ${token} ${name}`.toLowerCase();
+        const patterns = [
+          { re: /\bprofile[\s_-]*t\b|profilet\b/, label: "Profile T" },
+          { re: /\bprofile[\s_-]*s\b|profiles\b/, label: "Profile S" },
+          { re: /\bprofile[\s_-]*g\b|profileg\b/, label: "Profile G" },
+          { re: /\bprofile[\s_-]*a\b|profilea\b/, label: "Profile A" },
+          { re: /\bprofile[\s_-]*c\b|profilec\b/, label: "Profile C" },
+          { re: /\bprofile[\s_-]*m\b|profilem\b/, label: "Profile M" },
+          { re: /\bprofile[\s_-]*q\b|profileq\b/, label: "Profile Q" },
+        ];
+        const hit = patterns.find((p) => p.re.test(combined));
+        return hit ? hit.label : "";
+      };
 
       function populateOnvifSelect(devices) {
         if (!camOnvifSelect) return;
@@ -1152,19 +1271,41 @@
           const payload = { host, username, password };
           const res = await api("/api/go2rtc/onvif/profiles", { method: "POST", body: JSON.stringify(payload) });
           const sources = Array.isArray(res?.sources) ? res.sources : [];
+          const srcUsed = res?.src || src;
+          const maskOnvifUrl = (val) => {
+            try {
+              const u = new URL(val);
+              const user = u.username ? `${u.username}:***@` : "";
+              return `${u.protocol}//${user}${u.host}${u.pathname || ""}${u.search || ""}`;
+            } catch {
+              return val.replace(/:\/\/([^:@]+):[^@]+@/i, "://$1:***@");
+            }
+          };
           if (!sources.length) {
             if (camOnvifMsg) { camOnvifMsg.textContent = "No profiles returned."; camOnvifMsg.className = "text-warning small"; }
             return;
           }
           if (camOnvifProfiles) {
-            camOnvifProfiles.innerHTML = sources
+            camOnvifProfiles.innerHTML = (srcUsed
+              ? `<div class="small text-muted mb-1"><i class="bi bi-link-45deg me-1"></i>ONVIF src: ${maskOnvifUrl(srcUsed)}</div>`
+              : "")
+              + sources
               .map((s, idx) => {
                 const nm = (s && s.name) || `stream${idx}`;
                 const url = (s && s.url) || "";
+                const profileToken = s?.token || s?.profile_token || s?.profileToken || s?.id || "";
+                const profileLabel = inferOnvifProfile(s);
                 const hostPart = (host || "").replace(/[\\/:]+/g, "_");
                 const friendlyPart = friendly.replace(/\s+/g, "_");
                 const genName = `${friendlyPart || hostPart}_${nm.replace(/\s+/g, "_")}`;
-                return `<div class="small text-muted"><i class="bi bi-camera-video me-1"></i>${genName} — <span class="text-body-secondary">${url}</span></div>`;
+                const badgeParts = [];
+                if (profileLabel) badgeParts.push(profileLabel);
+                if (profileToken) badgeParts.push(`token ${profileToken}`);
+                const profileBadge =
+                  badgeParts.length > 0
+                    ? `<span class="badge text-bg-secondary ms-2">ONVIF ${badgeParts.join(" / ")}</span>`
+                    : `<span class="badge text-bg-secondary ms-2">ONVIF profile: not reported</span>`;
+                return `<div class="small text-muted"><i class="bi bi-camera-video me-1"></i>${genName} — <span class="text-body-secondary">${url}</span>${profileBadge}</div>`;
               })
               .join("");
           }
@@ -1192,6 +1333,122 @@
 
       camOnvifAddBtn?.addEventListener("click", addOnvifStream);
       camPersistBtnOnvif?.addEventListener("click", persistStreams);
+
+      function sanitizeStreamName(value) {
+        return (value || "").trim().replace(/\s+/g, "_").replace(/[\\/:]+/g, "_");
+      }
+
+      async function sha256Hex(value) {
+        if (window.crypto?.subtle) {
+          const data = new TextEncoder().encode(value);
+          const digest = await window.crypto.subtle.digest("SHA-256", data);
+          return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+        }
+        const res = await api("/api/hash/sha256", { method: "POST", body: JSON.stringify({ value }) });
+        if (!res?.hash) {
+          throw new Error("SHA-256 hashing failed.");
+        }
+        return res.hash;
+      }
+
+      async function buildTapoUrl() {
+        const host = camTapoHost?.value?.trim() || "";
+        const cloudPass = camTapoCloudPass?.value ?? "";
+        const subtype = camTapoSubtype?.value || "0";
+        const channel = "0";
+        const useHash = camTapoAuthHash?.checked;
+        const hashVal = camTapoHash?.value?.trim() || "";
+        const username = camTapoUser?.value?.trim() || "admin";
+
+        if (!host) {
+          throw new Error("Enter a camera IP/host.");
+        }
+        let authPart = "";
+        if (useHash) {
+          if (!hashVal) {
+            throw new Error("Provide a pre-hashed password (MD5/SHA-256).");
+          }
+          authPart = `${encodeURIComponent(username)}:${hashVal}`;
+        } else {
+          if (!cloudPass) {
+            throw new Error("Enter the cloud/app password.");
+          }
+          const hash = await sha256Hex(cloudPass);
+          authPart = `admin:${hash}`;
+        }
+        const query = `channel=${encodeURIComponent(channel)}&subtype=${encodeURIComponent(subtype)}`;
+        return `tapo://${authPart}@${host}?${query}`;
+      }
+
+      async function refreshTapoPreview() {
+        if (!camTapoPreview) return;
+        try {
+          const url = await buildTapoUrl();
+          camTapoPreview.textContent = url;
+          if (camTapoMsg) {
+            camTapoMsg.textContent = "Tapo URL ready.";
+            camTapoMsg.className = "text-success small";
+          }
+          return url;
+        } catch (err) {
+          camTapoPreview.textContent = "Build to preview…";
+          if (camTapoMsg) {
+            camTapoMsg.textContent = err.message || "Build failed.";
+            camTapoMsg.className = "text-danger small";
+          }
+          return "";
+        }
+      }
+
+      async function addTapoStream(persist = false) {
+        if (!camTapoAddBtn || !camTapoPersistBtn) return;
+        const friendly = camFriendlyInput?.value?.trim() || "";
+        const rawName = friendly;
+        const host = camTapoHost?.value?.trim() || "";
+        const base = sanitizeStreamName(rawName || friendly || host);
+        const name = base || "tapo_camera";
+        const url = await refreshTapoPreview();
+        if (!url) return;
+        const note = `http://localhost:1984/webrtc.html?src=${encodeURIComponent(name)}&media=video+audio+microphone`;
+
+        const btn = persist ? camTapoPersistBtn : camTapoAddBtn;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+        try {
+          if (persist) {
+            await api("/api/go2rtc/streams/persist", { method: "POST", body: JSON.stringify({ streams: [{ name, src: url, comment: note }] }) });
+            await api("/api/go2rtc/reload", { method: "POST" });
+            toast("Saved to config and reloaded go2rtc");
+          } else {
+            await api("/api/go2rtc/streams", { method: "POST", body: JSON.stringify({ name, src: url }) });
+            toast("Stream added");
+          }
+          setStepStatus(camStep1Status, "Complete", "success");
+        } catch (err) {
+          toast(err.message || "Add failed", "error");
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = persist
+            ? '<i class="bi bi-save me-1"></i>Save to config & reload'
+            : '<i class="bi bi-plus-circle me-1"></i>Add stream';
+        }
+      }
+
+      camTapoAuthCloud?.addEventListener("change", () => {
+        if (camTapoAuthCloud.checked) {
+          camTapoHash.disabled = true;
+          camTapoUser.disabled = true;
+        }
+      });
+      camTapoAuthHash?.addEventListener("change", () => {
+        if (camTapoAuthHash.checked) {
+          camTapoHash.disabled = false;
+          camTapoUser.disabled = false;
+        }
+      });
+      camTapoBuildBtn?.addEventListener("click", refreshTapoPreview);
+      camTapoAddBtn?.addEventListener("click", () => addTapoStream(false));
+      camTapoPersistBtn?.addEventListener("click", () => addTapoStream(true));
 
       async function persistStreams() {
         const rows = camStreamsContainer?.querySelectorAll(".stream-row") || [];
@@ -1228,17 +1485,22 @@
 
       function setCamMode(mode) {
         const onvifActive = mode === "onvif";
-        if (camModeOnvifBtn && camModeRtspBtn) {
+        const tapoActive = mode === "tapo";
+        const rtspActive = mode === "rtsp";
+        if (camModeOnvifBtn && camModeTapoBtn && camModeRtspBtn) {
           camModeOnvifBtn.classList.toggle("active", onvifActive);
-          camModeRtspBtn.classList.toggle("active", !onvifActive);
+          camModeTapoBtn.classList.toggle("active", tapoActive);
+          camModeRtspBtn.classList.toggle("active", rtspActive);
         }
-        if (camOnvifSection && camRtspSection) {
+        if (camOnvifSection && camTapoSection && camRtspSection) {
           camOnvifSection.classList.toggle("d-none", !onvifActive);
-          camRtspSection.classList.toggle("d-none", onvifActive);
+          camTapoSection.classList.toggle("d-none", !tapoActive);
+          camRtspSection.classList.toggle("d-none", !rtspActive);
         }
       }
 
       camModeOnvifBtn?.addEventListener("click", () => setCamMode("onvif"));
+      camModeTapoBtn?.addEventListener("click", () => setCamMode("tapo"));
       camModeRtspBtn?.addEventListener("click", () => setCamMode("rtsp"));
       setCamMode("onvif");
 

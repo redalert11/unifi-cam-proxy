@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -185,7 +186,8 @@ def go2rtc_persist_streams(streams: list[dict] = Body(..., embed=True)):
         src = (item.get("src") or "").strip()
         if not name or not src:
             continue
-        cleaned.append({"name": name, "src": src})
+        comment = (item.get("comment") or "").strip()
+        cleaned.append({"name": name, "src": src, "comment": comment})
     if not cleaned:
         raise HTTPException(status_code=400, detail="no valid streams provided")
 
@@ -196,14 +198,46 @@ def go2rtc_persist_streams(streams: list[dict] = Body(..., embed=True)):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    data.setdefault("streams", {})
-    if not isinstance(data["streams"], dict):
-        data["streams"] = {}
+    streams = data.get("streams") if isinstance(data, dict) else {}
+    if not isinstance(streams, dict):
+        streams = {}
+    existing = set(streams.keys())
+
+    lines = content.splitlines()
+    streams_idx = next((i for i, line in enumerate(lines) if line.strip() == "streams:"), None)
+    if streams_idx is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        streams_idx = len(lines)
+        lines.append("streams:")
+    insert_at = streams_idx + 1
+    while insert_at < len(lines):
+        line = lines[insert_at]
+        if line.strip() == "":
+            insert_at += 1
+            continue
+        if not line.startswith(" "):
+            break
+        insert_at += 1
+
+    added = 0
+    new_lines = []
     for entry in cleaned:
-        data["streams"][entry["name"]] = entry["src"]
-    new_content = yaml.safe_dump(data, sort_keys=False)
-    manager.write_config(new_content)
-    return {"message": "streams persisted", "count": len(cleaned), "config_path": manager.config_path, "content": new_content}
+        name = entry["name"]
+        if name in existing:
+            continue
+        comment = entry.get("comment")
+        if comment:
+            new_lines.append(f"  #{comment}")
+        new_lines.append(f"  {name}: {entry['src']}")
+        added += 1
+
+    if new_lines:
+        lines[insert_at:insert_at] = new_lines
+        content = "\n".join(lines) + ("\n" if content.endswith("\n") or not content else "")
+        manager.write_config(content)
+
+    return {"message": "streams persisted", "count": added, "config_path": manager.config_path, "content": content}
 
 
 @app.get("/api/go2rtc/streams/{name}/probe")
@@ -229,6 +263,14 @@ def go2rtc_probe_stream(name: str):
         raise HTTPException(status_code=exc.response.status_code if exc.response else 500, detail=detail or "go2rtc error")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/hash/sha256")
+def hash_sha256(value: str = Body(..., embed=True)):
+    if value is None:
+        raise HTTPException(status_code=400, detail="value is required")
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest().upper()
+    return {"hash": digest}
 
 
 @app.get("/api/go2rtc/onvif/discover")
