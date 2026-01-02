@@ -11,6 +11,9 @@
       .bd-placeholder-img { font-size: 1.125rem; text-anchor: middle; -webkit-user-select: none; -moz-user-select: none; user-select: none; }
       .toast-container { z-index: 1080; }
       textarea { font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
+      .tapo-warning { font-size: 0.4em; }
+      #dashboard { min-height: 200px; }
+      #camCards { min-height: 200px; }
     </style>
   </head>
   <body>
@@ -33,7 +36,31 @@
             <ul class="nav flex-column">
               <li class="nav-item">
                 <div class="d-flex align-items-center">
-                  <a class="nav-link active" data-bs-toggle="tab" data-bs-target="#status" href="#status" role="tab">
+                  <a class="nav-link active" data-bs-toggle="tab" href="#dashboard" data-bs-target="#dashboard" role="tab">
+                    <i class="bi bi-camera-video me-2"></i>Cameras
+                  </a>
+                  <button class="btn btn-sm btn-link text-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#camerasSubnav" aria-expanded="true" aria-controls="camerasSubnav">
+                    <i class="bi bi-chevron-down"></i>
+                  </button>
+                </div>
+                <div class="collapse show" id="camerasSubnav">
+                  <ul class="flex-column ms-3 mb-2 list-unstyled">
+                    <li class="nav-item">
+                      <a class="nav-link small py-1 active" data-bs-toggle="tab" data-bs-target="#dashboard" href="#dashboard" role="tab">
+                        <i class="bi bi-speedometer2 me-1"></i>Dashboard
+                      </a>
+                    </li>
+                    <li class="nav-item">
+                      <a class="nav-link small py-1" data-bs-toggle="tab" data-bs-target="#cameras" href="#cameras" role="tab">
+                        <i class="bi bi-grid me-1"></i>Setup
+                      </a>
+                    </li>
+                  </ul>
+                </div>
+              </li>
+              <li class="nav-item">
+                <div class="d-flex align-items-center">
+                  <a class="nav-link" data-bs-toggle="tab" data-bs-target="#status" href="#status" role="tab">
                     <i class="bi bi-hdd-network me-2"></i>go2rtc
                   </a>
                   <button class="btn btn-sm btn-link text-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#go2rtcSubnav" aria-expanded="true" aria-controls="go2rtcSubnav">
@@ -61,30 +88,6 @@
                 </div>
               </li>
               <li class="nav-item">
-                <div class="d-flex align-items-center">
-                  <a class="nav-link" data-bs-toggle="tab" href="#dashboard" data-bs-target="#dashboard" role="tab">
-                    <i class="bi bi-camera-video me-2"></i>Cameras
-                  </a>
-                  <button class="btn btn-sm btn-link text-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#camerasSubnav" aria-expanded="true" aria-controls="camerasSubnav">
-                    <i class="bi bi-chevron-down"></i>
-                  </button>
-                </div>
-                <div class="collapse show" id="camerasSubnav">
-                  <ul class="flex-column ms-3 mb-2 list-unstyled">
-                    <li class="nav-item">
-                      <a class="nav-link small py-1" data-bs-toggle="tab" data-bs-target="#dashboard" href="#dashboard" role="tab">
-                        <i class="bi bi-speedometer2 me-1"></i>Dashboard
-                      </a>
-                    </li>
-                    <li class="nav-item">
-                      <a class="nav-link small py-1" data-bs-toggle="tab" data-bs-target="#cameras" href="#cameras" role="tab">
-                        <i class="bi bi-grid me-1"></i>Setup
-                      </a>
-                    </li>
-                  </ul>
-                </div>
-              </li>
-              <li class="nav-item">
                 <a class="nav-link" data-bs-toggle="tab" href="#web-logs" role="tab">
                   <i class="bi bi-terminal me-2"></i>Webserver Logs
                 </a>
@@ -95,7 +98,7 @@
 
         <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
           <div class="tab-content py-3">
-            <div class="tab-pane fade show active" id="status" role="tabpanel">
+            <div class="tab-pane fade" id="status" role="tabpanel">
               <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
                 <h1 class="h4">go2rtc / Status</h1>
                 <span class="badge text-bg-secondary">live</span>
@@ -405,13 +408,17 @@
                 </div>
               </div>
             </div>
+            </div>
 
-            <div class="tab-pane fade" id="dashboard" role="tabpanel">
+            <div class="tab-pane fade show active" id="dashboard" role="tabpanel">
               <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
-                <h1 class="h4">Dashboard</h1>
-                <span class="badge text-bg-warning">Placeholder</span>
+                <h1 class="h4">Cameras</h1>
+                <div class="d-flex gap-2 align-items-center">
+                  <span class="badge text-bg-info">Dashboard</span>
+                  <button class="btn btn-outline-secondary btn-sm" id="camCardsRefresh"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+                </div>
               </div>
-              <p class="text-muted">Instance dashboard and log tails will appear here next.</p>
+              <div class="row g-3" id="camCards"></div>
             </div>
 
           </div>
@@ -455,7 +462,7 @@
         const webLogRefreshBtn = document.getElementById('webLogRefresh');
         const webLogBox = document.getElementById('webLogBox');
         const webLogPathBadge = document.getElementById('webLogPathBadge');
-        const webLogDownload = document.getElementById('webLogDownload');
+      const webLogDownload = document.getElementById('webLogDownload');
       const webLogLevelSelect = document.getElementById('webLogLevel');
       const webLogFollowBtn = document.getElementById('webLogFollow');
       let webLogFollowTimer = null;
@@ -468,6 +475,13 @@
       const savedWebLogLevel = localStorage.getItem("webLogLevel");
       if (webLogLevelSelect && savedWebLogLevel) {
         webLogLevelSelect.value = savedWebLogLevel;
+      }
+
+      // Ensure dashboard tab is not nested inside cameras tab
+      const tabContentEl = document.querySelector(".tab-content");
+      const dashPaneEl = document.getElementById("dashboard");
+      if (tabContentEl && dashPaneEl && dashPaneEl.closest("#cameras")) {
+        tabContentEl.appendChild(dashPaneEl);
       }
 
       // Camera setup refs
@@ -510,6 +524,8 @@
       const camProbeMsg = document.getElementById("camProbeMsg");
       const camCompatibility = document.getElementById("camCompatibility");
       const camStep2Status = document.getElementById("camStep2Status");
+      const camCards = document.getElementById("camCards");
+      const camCardsRefresh = document.getElementById("camCardsRefresh");
 
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -782,13 +798,20 @@
       document.querySelectorAll('a[data-bs-toggle="tab"]').forEach((tab) => {
         tab.addEventListener("shown.bs.tab", (e) => {
           const target = e.target.getAttribute("data-bs-target");
+          document.querySelectorAll(".tab-pane.show").forEach((pane) => {
+            if (`#${pane.id}` !== target) {
+              pane.classList.remove("show", "active");
+            }
+          });
           if (target === "#logs" && logFollowTimer) {
             loadLogs({ scroll: true });
           } else if (target === "#web-logs" && webLogFollowTimer) {
             loadWebLogs({ scroll: true });
           }
           if (target === "#cameras") {
-            camNameInput?.focus();
+            camFriendlyInput?.focus();
+          } else if (target === "#dashboard") {
+            renderCameraCards();
           }
         });
       });
@@ -1503,6 +1526,58 @@
       camModeTapoBtn?.addEventListener("click", () => setCamMode("tapo"));
       camModeRtspBtn?.addEventListener("click", () => setCamMode("rtsp"));
       setCamMode("onvif");
+
+      function go2rtcBaseUrl() {
+        return `http://${location.hostname}:1984`;
+      }
+
+      function buildFrameUrl(name, cacheBust = false) {
+        const base = `${go2rtcBaseUrl()}/api/frame.jpeg?src=${encodeURIComponent(name)}`;
+        if (!cacheBust) {
+          return base;
+        }
+        const stamp = Date.now();
+        return `${base}&t=${stamp}`;
+      }
+
+      async function renderCameraCards() {
+        if (!camCards) return;
+        camCards.innerHTML = '<div class="text-muted small">Loading cameras…</div>';
+        const streams = await loadStreamsList();
+        const names = Object.keys(streams || {});
+        if (!names.length) {
+          camCards.innerHTML = '<div class="text-muted small">No streams configured in go2rtc.</div>';
+          return;
+        }
+        camCards.innerHTML = "";
+        names.forEach((name) => {
+          const card = document.createElement("div");
+          card.className = "col-12 col-md-6 col-xl-4";
+          const imgUrl = buildFrameUrl(name, true);
+          const linkUrl = buildFrameUrl(name, false);
+          card.innerHTML = `
+            <div class="card shadow-sm h-100">
+              <div class="card-header d-flex align-items-center justify-content-between">
+                <span class="fw-semibold">${name}</span>
+                <a class="small text-decoration-none" href="${linkUrl}" target="_blank" rel="noopener">Snapshot</a>
+              </div>
+              <div class="card-body">
+                <div class="ratio ratio-16x9 bg-body-tertiary rounded overflow-hidden">
+                  <img src="${imgUrl}" alt="${name} snapshot" class="w-100 h-100 object-fit-cover" loading="lazy" onerror="this.style.display='none'; this.closest('.card-body').querySelector('.snapshot-fallback').classList.remove('d-none');">
+                  <div class="snapshot-fallback text-muted small d-none d-flex align-items-center justify-content-center">Snapshot unavailable</div>
+                </div>
+              </div>
+            </div>
+          `;
+          camCards.appendChild(card);
+        });
+      }
+
+      camCardsRefresh?.addEventListener("click", renderCameraCards);
+      const dashPane = document.getElementById("dashboard");
+      if (dashPane?.classList.contains("show")) {
+        renderCameraCards();
+      }
 
       camAddAllBtn?.addEventListener("click", async () => {
         const rows = camStreamsContainer?.querySelectorAll(".stream-row") || [];
