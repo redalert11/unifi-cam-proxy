@@ -183,11 +183,17 @@ def go2rtc_persist_streams(streams: list[dict] = Body(..., embed=True)):
         if not isinstance(item, dict):
             continue
         name = (item.get("name") or "").strip()
-        src = (item.get("src") or "").strip()
-        if not name or not src:
+        src = item.get("src")
+        src_list = None
+        if isinstance(src, (list, tuple)):
+            src_list = [s for s in (str(v).strip() for v in src) if s]
+            src = ""
+        else:
+            src = (src or "").strip()
+        if not name or (not src and not src_list):
             continue
         comment = (item.get("comment") or "").strip()
-        cleaned.append({"name": name, "src": src, "comment": comment})
+        cleaned.append({"name": name, "src": src, "src_list": src_list, "comment": comment})
     if not cleaned:
         raise HTTPException(status_code=400, detail="no valid streams provided")
 
@@ -229,7 +235,12 @@ def go2rtc_persist_streams(streams: list[dict] = Body(..., embed=True)):
         comment = entry.get("comment")
         if comment:
             new_lines.append(f"  #{comment}")
-        new_lines.append(f"  {name}: {entry['src']}")
+        if entry.get("src_list"):
+            new_lines.append(f"  {name}:")
+            for src_item in entry["src_list"]:
+                new_lines.append(f"    - {src_item}")
+        else:
+            new_lines.append(f"  {name}: {entry['src']}")
         added += 1
 
     if new_lines:

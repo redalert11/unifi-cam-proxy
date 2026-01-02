@@ -1,0 +1,13 @@
+body { font-size: 0.95rem; }
+.bd-placeholder-img {
+  font-size: 1.125rem;
+  text-anchor: middle;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+.toast-container { z-index: 1080; }
+textarea { font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
+.tapo-warning { font-size: 0.4em; }
+#dashboard { min-height: 200px; }
+#camCards { min-height: 200px; }

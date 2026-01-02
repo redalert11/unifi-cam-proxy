@@ -1,0 +1,199 @@
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+                <h1 class="h4">Cameras</h1>
+                <span class="badge text-bg-info">Setup</span>
+              </div>
+              <div class="row g-3">
+                <div class="col-12">
+                  <div class="card shadow-sm">
+                    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#camStep1Body" aria-expanded="false" aria-controls="camStep1Body">
+                      <div class="d-flex align-items-center gap-2">
+                        <span class="badge text-bg-primary">Step 1</span>
+                        <span class="fw-semibold">Add camera to go2rtc (skip if camera is already configured in go2rtc)</span>
+                      </div>
+                      <div class="d-flex align-items-center gap-2">
+                        <span class="text-muted small" id="camStep1Status"></span>
+                        <i class="bi bi-arrows-expand collapse-icon" id="camStep1Icon"></i>
+                      </div>
+                    </div>
+                    <div id="camStep1Body" class="collapse">
+                      <div class="card-body">
+                      <div class="mb-3">
+                        <label class="form-label">Friendly name</label>
+                        <input class="form-control" id="camFriendly" placeholder="Front Door">
+                      </div>
+
+                      <div class="d-flex gap-2 mb-3">
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Camera add mode">
+                          <button type="button" class="btn btn-outline-primary active" id="camModeOnvifBtn">ONVIF</button>
+                          <button type="button" class="btn btn-outline-primary" id="camModeTapoBtn">Tapo</button>
+                          <button type="button" class="btn btn-outline-primary" id="camModeRtspBtn">Manual RTSP</button>
+                        </div>
+                      </div>
+
+                      <div id="camOnvifSection">
+                        <div class="alert alert-info py-2 small mb-3">
+                          <i class="bi bi-broadcast-pin me-2"></i>ONVIF discovery adds cameras directly via go2rtc. (Manual RTSP is available if discovery fails.)
+                        </div>
+                        <div class="d-flex gap-2 align-items-center mb-3">
+                          <button class="btn btn-outline-secondary btn-sm" id="camOnvifScanBtn"><i class="bi bi-search me-1"></i>Scan network</button>
+                          <span class="text-muted small" id="camOnvifScanMsg">Scans for ONVIF cameras via go2rtc.</span>
+                        </div>
+                        <div class="row g-2 align-items-end mb-2">
+                          <div class="col-md-6">
+                            <label class="form-label small mb-1">Discovered cameras</label>
+                            <select class="form-select form-select-sm" id="camOnvifSelect">
+                              <option value="">Select a camera…</option>
+                            </select>
+                          </div>
+                          <div class="col-md-3">
+                            <label class="form-label small mb-1">Username</label>
+                            <input class="form-control form-control-sm" id="camOnvifUser" placeholder="admin">
+                          </div>
+                          <div class="col-md-3">
+                            <label class="form-label small mb-1">Password</label>
+                            <input class="form-control form-control-sm" id="camOnvifPass" type="password" placeholder="password">
+                          </div>
+                        </div>
+                        <div class="d-flex gap-2 mb-2 flex-wrap">
+                          <button class="btn btn-primary btn-sm" id="camOnvifAddBtn"><i class="bi bi-plus-circle me-1"></i>Load profiles</button>
+                          <span class="text-muted small" id="camOnvifMsg"></span>
+                        </div>
+                        <div id="camOnvifProfiles" class="mt-2"></div>
+                        <div class="mt-2 d-flex gap-2 flex-wrap d-none" id="camPersistWrapperOnvif">
+                          <button class="btn btn-outline-primary btn-sm" id="camPersistBtnOnvif"><i class="bi bi-save me-1"></i>Save to config & reload</button>
+                        </div>
+                      </div>
+
+                      <div id="camTapoSection" class="d-none">
+                        <div class="alert alert-warning py-2 small mb-3" role="button" data-bs-toggle="collapse" data-bs-target="#tapoThirdPartySteps" aria-expanded="false" aria-controls="tapoThirdPartySteps" style="cursor: pointer;">
+                          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                            <span><i class="bi bi-info-circle me-2"></i>Enable Third-Party Compatibility in the Tapo app</span>
+                            <span class="text-muted small">Click to show steps</span>
+                          </div>
+                          <div class="collapse mt-2" id="tapoThirdPartySteps">
+                            <ol class="text-muted small mb-0 ps-3">
+                              <li>Open the Tapo app and login</li>
+                              <li>Tap "Me"</li>
+                              <li>Tap "Tapo Lab"</li>
+                              <li>Tap "Third-Party Compatibility"</li>
+                              <li>Tap "Enable"</li>
+                            </ol>
+                          </div>
+                        </div>
+                        <div class="alert alert-warning py-2 small mb-3" role="button" data-bs-toggle="collapse" data-bs-target="#tapoCameraAccountSteps" aria-expanded="false" aria-controls="tapoCameraAccountSteps" style="cursor: pointer;">
+                          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                            <span><i class="bi bi-info-circle me-2"></i>Enable Camera Account on the camera</span>
+                            <span class="text-muted small">Click to show steps</span>
+                          </div>
+                          <div class="collapse mt-2" id="tapoCameraAccountSteps">
+                            <ol class="text-muted small mb-0 ps-3">
+                              <li>Open the Tapo app and login</li>
+                              <li>Select the camera</li>
+                              <li>Open Settings</li>
+                              <li>Open "Advanced Settings"</li>
+                              <li>Tap "Camera Account"</li>
+                              <li>Enable "Camera Account"</li>
+                              <li>Tap Verify your account and set username and password</li>
+                            </ol>
+                          </div>
+                        </div>
+                        <div class="alert alert-warning py-2 small mb-3">
+                          <i class="bi bi-info-circle me-2"></i>Reboot each camera after enabling Third-Party Compatibility or Camera Account
+                        </div>
+                        <div class="row g-2 align-items-end mb-2">
+                          <div class="col-md-5">
+                            <label class="form-label small mb-1">Camera IP</label>
+                            <input class="form-control form-control-sm" id="camTapoHost" placeholder="192.168.0.100">
+                          </div>
+                          <div class="col-md-4">
+                            <label class="form-label small mb-1">App password</label>
+                            <input class="form-control form-control-sm" id="camTapoCloudPass" type="password" placeholder="app password">
+                          </div>
+                        </div>
+                        <div class="row g-2 align-items-end mb-2">
+                          <div class="col-md-4">
+                            <label class="form-label small mb-1">Auth mode</label>
+                            <div class="form-check">
+                              <input class="form-check-input" type="radio" name="camTapoAuthMode" id="camTapoAuthCloud" value="cloud" checked>
+                              <label class="form-check-label small" for="camTapoAuthCloud">Hash cloud password (SHA-256)</label>
+                            </div>
+                            <div class="form-check">
+                              <input class="form-check-input" type="radio" name="camTapoAuthMode" id="camTapoAuthHash" value="hash">
+                              <label class="form-check-label small" for="camTapoAuthHash">Use pre-hashed password</label>
+                            </div>
+                          </div>
+                          <div class="col-md-4">
+                            <label class="form-label small mb-1">Hashed password (MD5/SHA)</label>
+                            <input class="form-control form-control-sm" id="camTapoHash" placeholder="UPPERCASE hash" disabled>
+                          </div>
+                          <div class="col-md-2">
+                            <label class="form-label small mb-1">Username</label>
+                            <input class="form-control form-control-sm" id="camTapoUser" placeholder="admin" value="admin" disabled>
+                          </div>
+                          <div class="col-md-2">
+                            <label class="form-label small mb-1">Subtype</label>
+                            <select class="form-select form-select-sm" id="camTapoSubtype">
+                              <option value="0" selected>HD (0)</option>
+                              <option value="1">VGA (1)</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div class="row g-2 align-items-end mb-2">
+                          <div class="col-md-12">
+                            <label class="form-label small mb-1">Tapo URL preview</label>
+                            <div class="form-control form-control-sm bg-body-tertiary" id="camTapoPreview">Build to preview…</div>
+                          </div>
+                        </div>
+                        <div class="d-flex gap-2 mb-2 flex-wrap">
+                          <button class="btn btn-outline-secondary btn-sm" id="camTapoBuildBtn"><i class="bi bi-wrench-adjustable me-1"></i>Build URL</button>
+                          <button class="btn btn-primary btn-sm d-none" id="camTapoAddBtn"><i class="bi bi-plus-circle me-1"></i>Add stream</button>
+                          <button class="btn btn-outline-primary btn-sm" id="camTapoPersistBtn"><i class="bi bi-save me-1"></i>Save to config & reload</button>
+                          <span class="text-muted small" id="camTapoMsg"></span>
+                        </div>
+                      </div>
+                      <div id="camRtspSection">
+                      <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="fw-semibold">Streams</span>
+                      </div>
+                      <datalist id="camNameList"></datalist>
+                      <div id="camStreamsContainer" class="d-flex flex-column gap-2"></div>
+                      <div class="mt-2 d-flex gap-2 flex-wrap">
+                        <button class="btn btn-outline-secondary btn-sm" id="camAddExtraBtn2"><i class="bi bi-plus-lg me-1"></i>Add another stream</button>
+                        <button class="btn btn-primary btn-sm" id="camAddAllBtn"><i class="bi bi-plus-circle me-1"></i>Add streams</button>
+                        <button class="btn btn-outline-primary btn-sm" id="camPersistBtn"><i class="bi bi-save me-1"></i>Save to config & reload</button>
+                      </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-12">
+                  <div class="card shadow-sm">
+                    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#camStep2Body" aria-expanded="false" aria-controls="camStep2Body">
+                      <div class="d-flex align-items-center gap-2">
+                        <span class="badge text-bg-primary">Step 2</span>
+                        <span class="fw-semibold">Probe & verify stream</span>
+                      </div>
+                      <div class="d-flex align-items-center gap-2">
+                        <span class="text-muted small" id="camStep2Status">pending</span>
+                        <i class="bi bi-arrows-expand collapse-icon" id="camStep2Icon"></i>
+                      </div>
+                    </div>
+                    <div id="camStep2Body" class="collapse">
+                      <div class="card-body">
+                      <div class="d-flex gap-2 mb-2">
+                        <button class="btn btn-outline-secondary" id="camProbeBtn"><i class="bi bi-search me-1"></i>Probe stream</button>
+                        <span class="text-muted small" id="camProbeMsg"></span>
+                      </div>
+                      <div id="camCompatibility" class="mt-3"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-12">
+                  <div class="alert alert-warning mb-0">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Future steps (4/5): add UniFi settings and finalize integration.
+                  </div>
+                </div>
+              </div>
+            </div>
