@@ -24,10 +24,16 @@ import argparse
 import sys
 import subprocess
 from typing import Dict, Any, Tuple
+from urllib.parse import quote, urlparse
+from urllib.request import urlopen
+import socket
+
+from Web.onvif_client import OnvifSoapClient
+from urllib.error import HTTPError
 
 
 @dataclass(frozen=True)
-class FlightCheck:
+class FinalFlightCheck:
     """
     Static “source of truth” settings derived from the observed stream in test-dev/target video format.md.
     Terminology:
@@ -55,8 +61,8 @@ class FlightCheck:
     enforce_tcp_frame_limit_bytes: int = 5_000_000  # hard limit per TCP frame
 
     # Report video (informational)
-    report_width: int = 2688  # observed
-    report_height: int = 1512  # observed
+    report_width: int = 0  # not enforced
+    report_height: int = 0  # not enforced
     report_framerate_num: int = 24  # observed (r_frame_rate: 24/1)
     report_framerate_den: int = 1  # observed
     report_gop_seconds: float = 0.0  # not verified
@@ -210,6 +216,124 @@ class FlightCheck:
         return results
 
 
+class RtspProbe:
+    """
+    Fetch stream metadata via ffprobe/ffmpeg for RTSP/FLV/go2rtc outputs.
+    """
+
+    def __init__(self, ffprobe_path: str = "ffprobe", ffmpeg_path: str = "ffmpeg") -> None:
+        self.ffprobe_path = ffprobe_path
+        self.ffmpeg_path = ffmpeg_path
+
+    def summarize_flv(self, url: str) -> Dict[str, Any]:
+        return summarize_flv_stream(url)
+
+    def test_flv(self, url: str) -> Dict[str, Any]:
+        return test_flv_stream(url)
+
+    def summarize_go2rtc_stream(self, name: str, base_url: str = "http://localhost:1984") -> Dict[str, Any]:
+        return summarize_go2rtc_stream(name, base_url=base_url, include_producers=True)
+
+    def summarize_go2rtc_stream_channels(self, name: str, base_url: str = "http://localhost:1984") -> Dict[str, Any]:
+        return summarize_go2rtc_stream_channels(name, base_url=base_url)
+
+    def summarize_rtsp_stream(
+        self,
+        url: str,
+        go2rtc_channel: str | None = None,
+        stream_mac: str | None = None,
+    ) -> Dict[str, Any]:
+        summary = summarize_flv_stream(url)
+        mac_info = _mac_from_url(url)
+        video = summary.get("video") or {}
+        return {
+            "codec": video.get("codec"),
+            "profile": video.get("profile"),
+            "level": video.get("level"),
+            "pixFmt": video.get("pix_fmt"),
+            "width": video.get("width"),
+            "height": video.get("height"),
+            "fps": (video.get("r_frame_rate") or {}).get("value"),
+            "avgFps": (video.get("avg_frame_rate") or {}).get("value"),
+            "bitrate": summary.get("bitrate") or video.get("bitrate"),
+            "container": summary.get("container"),
+            "go2rtcChannel": go2rtc_channel,
+            "streamUrl": url,
+            "streamMac": stream_mac or mac_info.get("mac"),
+            "audioCodec": (summary.get("audio") or {}).get("codec"),
+            "audioSampleRate": (summary.get("audio") or {}).get("sample_rate"),
+            "audioChannels": (summary.get("audio") or {}).get("channels"),
+        }
+
+
+class OnvifProbe:
+    """
+    Fetch device and profile settings via ONVIF when available.
+    """
+
+    @staticmethod
+    def _profile_to_stream_fields(profile: Dict[str, Any]) -> Dict[str, Any]:
+        video_encoder = profile.get("video_encoder") or {}
+        codec = (profile.get("video_encoding") or "").lower() or None
+        return {
+            "codec": codec,
+            "profile": video_encoder.get("profile"),
+            "level": None,
+            "pixFmt": None,
+            "width": profile.get("video_width"),
+            "height": profile.get("video_height"),
+            "fps": None if not video_encoder.get("framerate_limit") else float(video_encoder.get("framerate_limit")),
+            "avgFps": None,
+            "bitrate": None if not video_encoder.get("bitrate_limit") else int(video_encoder.get("bitrate_limit")),
+            "container": "rtsp",
+            "go2rtcChannel": None,
+            "streamUrl": profile.get("stream_uri"),
+            "streamMac": _mac_from_url(profile.get("stream_uri") or "").get("mac"),
+        }
+
+    def summarize_camera(
+        self,
+        host: str,
+        username: str,
+        password: str,
+        port: int | None = None,
+        is_tapo: bool = False,
+        device_path: str = "/onvif/device_service",
+        https: bool = False,
+        auth_mode: str = "digest",
+        wsse_mode: str = "digest",
+    ) -> Dict[str, Any]:
+        result = summarize_onvif_camera(
+            host=host,
+            username=username,
+            password=password,
+            port=port,
+            is_tapo=is_tapo,
+            device_path=device_path,
+            https=https,
+            auth_mode=auth_mode,
+            wsse_mode=wsse_mode,
+        )
+        mac_info = _mac_from_url(f"http://{host}")
+        result["device_ip"] = mac_info.get("ip")
+        result["device_mac"] = mac_info.get("mac")
+        result["device_mac_skipped"] = mac_info.get("skipped")
+        profiles = result.get("profiles") or []
+        result["streams"] = [self._profile_to_stream_fields(p) for p in profiles]
+        return result
+
+
+class FlightCheckRunner:
+    """
+    Orchestrate ONVIF discovery and stream probing, then run FinalFlightCheck rules.
+    """
+
+    def __init__(self) -> None:
+        self.rules = FinalFlightCheck()
+        self.streams = RtspProbe()
+        self.onvif = OnvifProbe()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run flight checks against ffprobe JSON.")
     parser.add_argument(
@@ -235,7 +359,7 @@ def main():
         print(f"Failed to parse probe JSON: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    fc = FlightCheck()
+    fc = FinalFlightCheck()
     results = fc.check_flight(probe)
     printable = dict(results)
     printable["All checks passed"] = printable.pop("ok")
@@ -265,10 +389,423 @@ def check_url(url: str, ffprobe_path: str = "ffprobe") -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         return {"All checks passed": False, "error": f"failed to parse ffprobe JSON: {exc}"}
 
-    fc = FlightCheck()
+    fc = FinalFlightCheck()
     results = fc.check_flight(probe)
     results["All checks passed"] = results.pop("ok")
     return results
+
+
+def _parse_rate(rate: str) -> Dict[str, Any]:
+    if not rate or rate == "0/0":
+        return {"raw": rate, "value": None}
+    try:
+        num, den = rate.split("/", 1)
+        num_i = int(num)
+        den_i = int(den)
+        value = round(num_i / den_i, 3) if den_i else None
+        return {"raw": rate, "value": value}
+    except Exception:
+        return {"raw": rate, "value": None}
+
+
+def _fetch_json(url: str, timeout: float = 4.0) -> Dict[str, Any]:
+    with urlopen(url, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8")
+    return json.loads(raw)
+
+
+def _local_ips() -> set[str]:
+    ips = {"127.0.0.1", "localhost"}
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None):
+            ip = info[4][0]
+            ips.add(ip)
+    except Exception:
+        pass
+    return ips
+
+
+def _arp_lookup(ip: str) -> str | None:
+    try:
+        with open("/proc/net/arp", "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except Exception:
+        return None
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) >= 4 and parts[0] == ip:
+            mac = parts[3].lower()
+            if mac != "00:00:00:00:00:00":
+                return mac
+    return None
+
+
+def _mac_from_url(url: str) -> Dict[str, Any]:
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        return {"ip": None, "mac": None, "skipped": False}
+    if host in _local_ips():
+        return {"ip": host, "mac": None, "skipped": True}
+    mac = _arp_lookup(host)
+    return {"ip": host, "mac": mac, "skipped": False}
+
+
+def _go2rtc_add_stream(base_url: str, name: str, src: str, timeout: float = 4.0) -> Dict[str, Any]:
+    query = f"?name={quote(name)}&src={quote(src)}"
+    url = f"{base_url.rstrip('/')}/api/streams{query}"
+    try:
+        with urlopen(url, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        return {"ok": True, "response": raw}
+    except HTTPError as exc:
+        return {"ok": False, "error": f"go2rtc add stream failed: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "error": f"go2rtc add stream failed: {exc}"}
+
+
+def _estimate_bitrate(url: str, seconds: int = 5) -> Dict[str, Any]:
+    cmd = [
+        "ffmpeg",
+        "-v",
+        "info",
+        "-stats",
+        "-i",
+        url,
+        "-t",
+        str(seconds),
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        return {"bitrate_bps": None, "error": exc.stderr or exc.stdout or str(exc)}
+
+    last_bitrate = None
+    for line in res.stderr.splitlines():
+        if "bitrate=" in line:
+            last_bitrate = line
+    if not last_bitrate:
+        return {"bitrate_bps": None, "error": "no bitrate reported"}
+
+    try:
+        # Example: "... bitrate= 3212.3kbits/s"
+        parts = last_bitrate.split("bitrate=", 1)[1].strip().split()
+        if not parts or parts[0].upper() == "N/A":
+            return {"bitrate_bps": None, "error": "bitrate N/A"}
+        value = float(parts[0])
+        unit = parts[1] if len(parts) > 1 else ""
+        if unit.startswith("kbit"):
+            bitrate_bps = int(value * 1000)
+        elif unit.startswith("mbit"):
+            bitrate_bps = int(value * 1000 * 1000)
+        else:
+            bitrate_bps = int(value)
+        return {"bitrate_bps": bitrate_bps, "error": None}
+    except Exception as exc:
+        return {"bitrate_bps": None, "error": f"parse error: {exc}"}
+
+
+def summarize_flv_stream(url: str) -> Dict[str, Any]:
+    """
+    Return a compact summary of ffprobe fields we care about.
+    """
+    summary: Dict[str, Any] = {
+        "url": url,
+        "container": None,
+        "bitrate": None,
+        "video": {},
+        "audio": {},
+    }
+    probe_cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_streams",
+        "-show_format",
+        "-print_format",
+        "json",
+        url,
+    ]
+    try:
+        probe_res = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+        probe = json.loads(probe_res.stdout)
+    except subprocess.CalledProcessError as exc:
+        return {"ok": False, "error": "ffprobe failed", "stderr": exc.stderr or exc.stdout or str(exc)}
+    except json.JSONDecodeError as exc:
+        return {"ok": False, "error": f"failed to parse ffprobe JSON: {exc}"}
+
+    fmt_block = probe.get("format") or {}
+    fmt = fmt_block.get("format_name")
+    fmt_bitrate = fmt_block.get("bit_rate")
+    summary["container"] = fmt
+    summary["bitrate"] = int(fmt_bitrate) if fmt_bitrate else None
+
+    vids = FinalFlightCheck._get_streams_by_type(probe, "video")
+    if vids:
+        v = vids[0]
+        summary["video"] = {
+            "codec": v.get("codec_name"),
+            "profile": v.get("profile"),
+            "level": v.get("level"),
+            "pix_fmt": v.get("pix_fmt"),
+            "width": v.get("width"),
+            "height": v.get("height"),
+            "r_frame_rate": _parse_rate(v.get("r_frame_rate", "")),
+            "avg_frame_rate": _parse_rate(v.get("avg_frame_rate", "")),
+            "bits_per_raw_sample": v.get("bits_per_raw_sample"),
+            "has_b_frames": v.get("has_b_frames"),
+            "bitrate": int(v.get("bit_rate")) if v.get("bit_rate") else None,
+        }
+
+    auds = FinalFlightCheck._get_streams_by_type(probe, "audio")
+    if auds:
+        a = auds[0]
+        summary["audio"] = {
+            "codec": a.get("codec_name"),
+            "sample_rate": a.get("sample_rate"),
+            "channels": a.get("channels"),
+        }
+
+    if summary["bitrate"] is None and summary["video"].get("bitrate") is None:
+        estimate = _estimate_bitrate(url, seconds=5)
+        summary["bitrate"] = estimate.get("bitrate_bps")
+        if estimate.get("error"):
+            summary["bitrate_error"] = estimate["error"]
+
+    summary["ok"] = True
+    return summary
+
+
+def summarize_go2rtc_streams(base_url: str = "http://localhost:1984") -> Dict[str, Any]:
+    """
+    Query go2rtc for all stream names and summarize each FLV output stream.
+    """
+    base = base_url.rstrip("/")
+    try:
+        data = _fetch_json(f"{base}/api/streams")
+    except Exception as exc:
+        return {"ok": False, "error": f"failed to query go2rtc streams: {exc}"}
+
+    names: list[str] = []
+    if isinstance(data, dict) and "streams" in data:
+        streams = data.get("streams")
+        if isinstance(streams, dict):
+            names = list(streams.keys())
+    elif isinstance(data, dict):
+        names = [k for k in data.keys() if isinstance(k, str)]
+
+    results: Dict[str, Any] = {}
+    for name in sorted(set(names)):
+        stream_url = f"{base}/api/stream.flv?src={quote(name)}"
+        results[name] = summarize_flv_stream(stream_url)
+
+    return {"ok": True, "streams": results}
+
+
+def summarize_go2rtc_stream(
+    name: str, base_url: str = "http://localhost:1984", include_producers: bool = True
+) -> Dict[str, Any]:
+    """
+    Summarize a single go2rtc stream name. Optionally test each producer URL.
+    """
+    base = base_url.rstrip("/")
+    try:
+        data = _fetch_json(f"{base}/api/streams")
+    except Exception as exc:
+        return {"ok": False, "error": f"failed to query go2rtc streams: {exc}"}
+
+    stream_info = None
+    if isinstance(data, dict) and "streams" in data:
+        streams = data.get("streams")
+        if isinstance(streams, dict):
+            stream_info = streams.get(name)
+    elif isinstance(data, dict):
+        stream_info = data.get(name)
+
+    if stream_info is None:
+        return {"ok": False, "error": f"stream not found: {name}"}
+
+    stream_url = f"{base}/api/stream.flv?src={quote(name)}"
+    result: Dict[str, Any] = {
+        "ok": True,
+        "name": name,
+        "stream_url": stream_url,
+        "summary": summarize_flv_stream(stream_url),
+    }
+
+    if include_producers:
+        producers = []
+        if isinstance(stream_info, dict):
+            producers = stream_info.get("producers") or []
+        producer_urls: list[str] = []
+        for producer in producers:
+            if isinstance(producer, dict):
+                url = producer.get("url")
+            else:
+                url = producer
+            if url:
+                producer_urls.append(str(url))
+        result["producers"] = {
+            "urls": producer_urls,
+            "note": "Producers are source URLs; go2rtc does not expose them as /api/stream.flv src.",
+        }
+
+    return result
+
+
+def summarize_go2rtc_stream_channels(
+    name: str,
+    base_url: str = "http://localhost:1984",
+) -> Dict[str, Any]:
+    """
+    For a stream with multiple producers, summarize each channel via ?channel=<index>.
+    """
+    base = base_url.rstrip("/")
+    data = summarize_go2rtc_stream(name, base_url=base, include_producers=True)
+    if not data.get("ok"):
+        return data
+
+    producers = data.get("producers", {}).get("urls", [])
+    if not producers:
+        return {"ok": False, "error": f"no producers found for stream: {name}"}
+
+    channels: list[Dict[str, Any]] = []
+    for idx, src in enumerate(producers):
+        stream_url = f"{base}/api/stream.flv?src={quote(name)}&channel={idx}"
+        entry: Dict[str, Any] = {
+            "channel": idx,
+            "src": src,
+            "stream_url": stream_url,
+            "summary": summarize_flv_stream(stream_url),
+        }
+        channels.append(entry)
+
+    return {"ok": True, "name": name, "channels": channels}
+
+
+def summarize_onvif_camera(
+    host: str,
+    username: str,
+    password: str,
+    port: int | None = None,
+    is_tapo: bool = False,
+    device_path: str = "/onvif/device_service",
+    https: bool = False,
+) -> Dict[str, Any]:
+    """
+    Use the ONVIF client to fetch device info, media profiles, and encoder details.
+    """
+    if port is None:
+        port = 2020 if is_tapo else 80
+
+    client = OnvifSoapClient(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        https=https,
+    )
+    device_url = client.endpoint(device_path)
+    media_url = client.get_media_xaddr(device_url) or device_url
+
+    device_info = client.get_device_info(device_url)
+    profiles = client.get_profiles(media_url, include_streams=True)
+    for prof in profiles:
+        video_token = prof.get("video_encoder_token")
+        audio_token = prof.get("audio_encoder_token")
+        if video_token:
+            prof["video_encoder"] = client.get_video_encoder_configuration(media_url, video_token)
+            prof["video_encoder_options"] = client.get_video_encoder_configuration_options(
+                media_url, profile_token=prof.get("token")
+            )
+        if audio_token:
+            prof["audio_encoder"] = client.get_audio_encoder_configuration(media_url, audio_token)
+            prof["audio_encoder_options"] = client.get_audio_encoder_configuration_options(
+                media_url, profile_token=prof.get("token")
+            )
+
+    return {
+        "ok": True,
+        "device_url": device_url,
+        "media_url": media_url,
+        "device_info": device_info,
+        "profiles": profiles,
+    }
+
+
+def summarize_onvif_profiles(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    device_path: str = "/onvif/device_service",
+    https: bool = False,
+) -> Dict[str, Any]:
+    """
+    Backwards-compatible wrapper for summarize_onvif_camera.
+    """
+    return summarize_onvif_camera(
+        host=host,
+        username=username,
+        password=password,
+        port=port,
+        is_tapo=False,
+        device_path=device_path,
+        https=https,
+    )
+
+
+def test_flv_stream(url: str) -> Dict[str, Any]:
+    """
+    Run ffprobe + a quick ffmpeg decode against a FLV stream URL and return details.
+    """
+    details: Dict[str, Any] = {"url": url}
+
+    probe_cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_streams",
+        "-show_format",
+        "-print_format",
+        "json",
+        url,
+    ]
+    try:
+        probe_res = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+        details["ffprobe_raw"] = probe_res.stdout
+        details["ffprobe"] = json.loads(probe_res.stdout)
+    except subprocess.CalledProcessError as exc:
+        details["ffprobe_error"] = exc.stderr or exc.stdout or str(exc)
+    except json.JSONDecodeError as exc:
+        details["ffprobe_error"] = f"failed to parse ffprobe JSON: {exc}"
+
+    decode_cmd = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        url,
+        "-t",
+        "2",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        decode_res = subprocess.run(decode_cmd, capture_output=True, text=True, check=True)
+        details["ffmpeg_stderr"] = decode_res.stderr.strip()
+        details["ok"] = True
+    except subprocess.CalledProcessError as exc:
+        details["ok"] = False
+        details["error"] = "ffmpeg failed to decode stream"
+        details["ffmpeg_stderr"] = exc.stderr or exc.stdout or str(exc)
+
+    return details
 
 
 if __name__ == "__main__":
