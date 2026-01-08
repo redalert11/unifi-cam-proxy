@@ -25,12 +25,27 @@ except ImportError:  # fallback for direct script execution
         from app import app
 
 
+def _load_web_settings():
+    settings_path = Path(__file__).resolve().parent / "data" / "web_settings.json"
+    if not settings_path.exists():
+        return {}
+    try:
+        import json
+
+        return json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def main():
+    web_settings = _load_web_settings()
+    save_web_logs = web_settings.get("save_web_logs", True)
     log_config = build_uvicorn_log_config(
         log_file=Path("logs/webserver.log"),
         level="info",
         max_bytes=5_000_000,
         backup_count=3,
+        enable_file=save_web_logs,
     )
     uvicorn.run(
         app,

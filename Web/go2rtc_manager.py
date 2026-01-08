@@ -28,6 +28,7 @@ class Go2RTCStatus:
     config_exists: bool
     streams_total: Optional[int] = None
     streams_online: Optional[int] = None
+    log_to_disk: bool = True
     message: str = ""
 
 
@@ -42,6 +43,8 @@ class Go2RTCManager:
         api_base: str = "http://127.0.0.1:1984",
         log_max_bytes: int = 5_000_000,
         log_backup_count: int = 3,
+        log_to_disk: bool = True,
+        log_buffer_size: int = 500,
     ):
         base_dir = Path(__file__).resolve().parent.parent
         self.binary_path = Path(binary_path)
@@ -56,6 +59,8 @@ class Go2RTCManager:
         self.api_base = api_base.rstrip("/")
         self.log_max_bytes = log_max_bytes
         self.log_backup_count = log_backup_count
+        self.log_to_disk = log_to_disk
+        self._log_buffer = deque(maxlen=log_buffer_size)
         self._process: Optional[subprocess.Popen] = None
         self._lock = threading.RLock()
         self._last_exit: Optional[int] = None
@@ -147,10 +152,7 @@ class Go2RTCManager:
         except Exception:
             return None, None
 
-    def read_log_tail(self, max_lines: int = 200) -> Optional[list[str]]:
-        """Return the last `max_lines` from the log file."""
-        if max_lines <= 0:
-            return []
+    def _read_file_tail(self, max_lines: int) -> Optional[list[str]]:
         if not self.log_path.exists():
             return None
         lines = deque(maxlen=max_lines)
@@ -158,6 +160,22 @@ class Go2RTCManager:
             for line in f:
                 lines.append(line.rstrip("\n"))
         return list(lines)
+
+    def is_file_logging_active(self) -> bool:
+        with self._lock:
+            running_with_file = self._process is not None and self._process.stdout is None
+        return self.log_to_disk or running_with_file
+
+    def read_log_tail(self, max_lines: int = 200) -> Optional[list[str]]:
+        """Return the last `max_lines` from the log (file or in-memory buffer)."""
+        if max_lines <= 0:
+            return []
+        if not self.log_to_disk:
+            if self.is_file_logging_active():
+                # Running with file logging from earlier session; fall back to file until restart/apply
+                return self._read_file_tail(max_lines)
+            return list(self._log_buffer)[-max_lines:]
+        return self._read_file_tail(max_lines)
 
     def status(self) -> Go2RTCStatus:
         with self._lock:
@@ -175,6 +193,7 @@ class Go2RTCManager:
                 binary_path=str(binary) if binary else None,
                 config_path=str(self.config_path.resolve()),
                 config_exists=self.config_path.is_file(),
+                log_to_disk=self.log_to_disk,
                 message="running" if running else "stopped",
             )
         # Fetch stream counts outside the lock to avoid blocking
@@ -193,6 +212,11 @@ class Go2RTCManager:
         if not self.config_path.exists():
             return None
         return self.config_path.read_text(encoding="utf-8")
+
+    def set_log_to_disk(self, enabled: bool):
+        with self._lock:
+            self.log_to_disk = bool(enabled)
+            self._log_buffer.clear()
 
     def start(self) -> Go2RTCStatus:
         with self._lock:
@@ -213,6 +237,7 @@ class Go2RTCManager:
                     binary_path=None,
                     config_path=str(self.config_path),
                     config_exists=self.config_path.is_file(),
+                    log_to_disk=self.log_to_disk,
                     message="go2rtc binary not found in PATH",
                 )
 
@@ -223,19 +248,32 @@ class Go2RTCManager:
                     time.sleep(3.0 - since_stop)
 
             self._ensure_dirs()
-            self._rotate_log()
-            log_file = self.log_path.open("a", encoding="utf-8")
+            self._log_buffer.clear()
+            log_target = None
+            if self.log_to_disk:
+                self._rotate_log()
+                log_target = self.log_path.open("a", encoding="utf-8")
             config_file = self.config_path.resolve()
             cmd = [str(binary), "-c", str(config_file)]
             self._process = subprocess.Popen(
                 cmd,
-                stdout=log_file,
+                stdout=log_target if self.log_to_disk else subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=config_file.parent,
+                text=True,
             )
+            if not self.log_to_disk and self._process.stdout:
+                threading.Thread(target=self._pump_stdout, args=(self._process.stdout,), daemon=True).start()
             self._started_at = time.time()
             self._last_exit = None
             return self.status()
+
+    def _pump_stdout(self, stream):
+        try:
+            for line in stream:
+                self._log_buffer.append(line.rstrip("\n"))
+        except Exception:
+            pass
 
     def stop(self, timeout: float = 5.0) -> Go2RTCStatus:
         with self._lock:

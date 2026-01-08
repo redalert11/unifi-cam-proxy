@@ -1,7 +1,30 @@
 import logging
+import os
 import sys
+from collections import deque
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Deque, Dict, List, Optional
+
+
+# In-memory buffers keyed by logger name so other components (e.g., API endpoints)
+# can expose recent logs without writing to disk.
+_LOG_BUFFERS: Dict[str, Deque[str]] = {}
+
+
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self, name: str, maxlen: int = 500):
+        super().__init__()
+        self.name = name
+        self.buffer = deque(maxlen=maxlen)
+        _LOG_BUFFERS.setdefault(name, self.buffer)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+        except Exception:
+            msg = record.getMessage()
+        self.buffer.append(msg)
 
 
 def _build_formatter():
@@ -10,25 +33,79 @@ def _build_formatter():
         "%Y-%m-%d %H:%M:%S",
     )
 
-def setup_logger(name="camera_app", level=logging.DEBUG):
+def _maybe_get_buffer_size(buffer_size: Optional[int]) -> int:
+    if buffer_size is not None:
+        return buffer_size
+    try:
+        return int(os.getenv("LOG_BUFFER_SIZE", "500") or 0)
+    except ValueError:
+        return 500
+
+
+def _file_logging_enabled(enable_file: Optional[bool]) -> bool:
+    if enable_file is not None:
+        return enable_file
+    env = os.getenv("LOG_FILE_ENABLED", "").strip().lower()
+    if env in {"0", "false", "no"}:
+        return False
+    if env in {"1", "true", "yes"}:
+        return True
+    return True  # default: on
+
+
+def get_log_buffer(name: str) -> List[str]:
+    """
+    Return a copy of the recent log lines for the given logger name.
+    """
+    buf = _LOG_BUFFERS.get(name)
+    if not buf:
+        return []
+    return list(buf)
+
+
+def setup_logger(
+    name="camera_app",
+    level=logging.DEBUG,
+    buffer_size: Optional[int] = None,
+    enable_file: Optional[bool] = None,
+    log_file: str | Path | None = None,
+    max_bytes: int = 5_000_000,
+    backup_count: int = 3,
+):
     """
     Create or retrieve a logger with the specified name and level.
-    Ensures each logger only has one handler.
+    Adds an in-memory buffer (deque) for quick access, and only writes to a file
+    if enable_file is True or LOG_FILE_ENABLED env var is set.
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
-    if logger.handlers:
-        return logger
+    formatter = _build_formatter()
+
+    # Attach stdout handler once
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+    # Attach in-memory buffer handler (if not already)
+    buf_size = _maybe_get_buffer_size(buffer_size)
+    if buf_size > 0 and not any(isinstance(h, InMemoryLogHandler) for h in logger.handlers):
+        mem_handler = InMemoryLogHandler(name=name, maxlen=buf_size)
+        mem_handler.setFormatter(formatter)
+        logger.addHandler(mem_handler)
+
+    # Optional file logging, off by default
+    if _file_logging_enabled(enable_file) and not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+        path = Path(log_file or f"logs/{name}.log").expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
     root_logger = logging.getLogger()
     if logger is not root_logger and root_logger.handlers:
         logger.propagate = True
-        return logger
-
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(_build_formatter())
-    logger.addHandler(handler)
 
     return logger
 
@@ -114,15 +191,50 @@ def build_uvicorn_log_config(
     level: str = "info",
     max_bytes: int = 5_000_000,
     backup_count: int = 3,
+    enable_file: Optional[bool] = None,
 ):
     """
     Return a dictConfig for uvicorn that logs to stdout and a rotating file.
     """
+    use_file = _file_logging_enabled(enable_file)
     log_path = Path(log_file).expanduser().resolve()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if use_file:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
     formatter = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     datefmt = "%Y-%m-%d %H:%M:%S"
     access_fmt = "%(message)s"
+
+    handlers = {
+        "default": {
+            "formatter": "default",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+        "access": {
+            "formatter": "access",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+    }
+    if use_file:
+        handlers.update(
+            {
+                "file": {
+                    "formatter": "default",
+                    "class": "logging.handlers.RotatingFileHandler",
+                    "filename": str(log_path),
+                    "maxBytes": max_bytes,
+                    "backupCount": backup_count,
+                },
+                "access_file": {
+                    "formatter": "access",
+                    "class": "logging.handlers.RotatingFileHandler",
+                    "filename": str(log_path),
+                    "maxBytes": max_bytes,
+                    "backupCount": backup_count,
+                },
+            }
+        )
 
     return {
         "version": 1,
@@ -137,35 +249,18 @@ def build_uvicorn_log_config(
                 "datefmt": datefmt,
             },
         },
-        "handlers": {
-            "default": {
-                "formatter": "default",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-            },
-            "file": {
-                "formatter": "default",
-                "class": "logging.handlers.RotatingFileHandler",
-                "filename": str(log_path),
-                "maxBytes": max_bytes,
-                "backupCount": backup_count,
-            },
-            "access": {
-                "formatter": "access",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-            },
-            "access_file": {
-                "formatter": "access",
-                "class": "logging.handlers.RotatingFileHandler",
-                "filename": str(log_path),
-                "maxBytes": max_bytes,
-                "backupCount": backup_count,
-            },
-        },
+        "handlers": handlers,
         "loggers": {
-            "uvicorn": {"handlers": ["default", "file"], "level": level.upper()},
-            "uvicorn.error": {"handlers": ["default", "file"], "level": level.upper(), "propagate": False},
-            "uvicorn.access": {"handlers": ["access", "access_file"], "level": level.upper(), "propagate": False},
+            "uvicorn": {"handlers": ["default"] + (["file"] if use_file else []), "level": level.upper()},
+            "uvicorn.error": {
+                "handlers": ["default"] + (["file"] if use_file else []),
+                "level": level.upper(),
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["access"] + (["access_file"] if use_file else []),
+                "level": level.upper(),
+                "propagate": False,
+            },
         },
     }

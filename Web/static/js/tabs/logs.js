@@ -6,12 +6,30 @@ export function initLogsTab(root, { api, toast, filterLinesByLevel }) {
   const logDownload = root.querySelector("#logDownload");
   const logLevelSelect = root.querySelector("#logLevel");
   const logFollowBtn = root.querySelector("#logFollow");
+  const logSaveToggle = root.querySelector("#logSaveToggle");
 
   if (!logRefreshBtn || !logLinesInput || !logBox) {
     return { start() {}, stop() {} };
   }
 
   let logFollowTimer = null;
+  let logSaveEnabled = true;
+
+  const updateDownloadState = (enabled) => {
+    logSaveEnabled = !!enabled;
+    if (logDownload) {
+      logDownload.classList.toggle("disabled", !enabled);
+      logDownload.setAttribute("aria-disabled", enabled ? "false" : "true");
+      if (enabled) {
+        logDownload.href = "/api/go2rtc/logs/download";
+      } else {
+        logDownload.removeAttribute("href");
+      }
+    }
+    if (logPathBadge && !enabled) {
+      logPathBadge.textContent = "path: disk logging off";
+    }
+  };
 
   async function loadLogs({ scroll = false } = {}) {
     let lines = parseInt(logLinesInput.value, 10);
@@ -24,14 +42,30 @@ export function initLogsTab(root, { api, toast, filterLinesByLevel }) {
     logRefreshBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
     try {
       const data = await api(`/api/go2rtc/logs?lines=${lines}`);
+      if (typeof data?.log_to_disk === "boolean") {
+        if (logSaveToggle) logSaveToggle.checked = data.log_to_disk;
+        updateDownloadState(data.log_to_disk);
+      }
       const filtered = filterLinesByLevel(data?.lines || [], logLevelSelect?.value || "ALL");
       logBox.textContent = filtered.length ? filtered.join("\n") : "(empty)";
       if (scroll) {
         logBox.scrollTop = logBox.scrollHeight;
       }
-      if (logPathBadge && (data?.path_rel || data?.path)) {
-        logPathBadge.textContent = `path: ${data.path_rel || data.path}`;
-        if (logDownload) logDownload.href = "/api/go2rtc/logs/download";
+      if (logPathBadge) {
+        if (data?.path_rel || data?.path) {
+          logPathBadge.textContent = `path: ${data.path_rel || data.path}`;
+        } else if (!logSaveEnabled) {
+          logPathBadge.textContent = "path: disk logging off";
+        } else {
+          logPathBadge.textContent = "path: -";
+        }
+        if (logDownload) {
+          if (logSaveEnabled) {
+            logDownload.href = "/api/go2rtc/logs/download";
+          } else {
+            logDownload.removeAttribute("href");
+          }
+        }
       }
     } catch (err) {
       logBox.textContent = "Failed to load logs.";
@@ -75,6 +109,37 @@ export function initLogsTab(root, { api, toast, filterLinesByLevel }) {
     if (saved) logLevelSelect.value = saved;
   }
 
+  async function syncLogSavePreference() {
+    if (!logSaveToggle) return;
+    try {
+      const settings = await api("/api/settings");
+      const enabled = settings?.save_go2rtc_logs !== false;
+      logSaveToggle.checked = enabled;
+      updateDownloadState(enabled);
+    } catch (err) {
+      toast("Failed to load settings for log toggle", "error");
+    }
+  }
+
+  if (logSaveToggle) {
+    logSaveToggle.addEventListener("change", async () => {
+      const enabled = logSaveToggle.checked;
+      try {
+        await api("/api/settings", { method: "PUT", body: JSON.stringify({ save_go2rtc_logs: enabled }) });
+        updateDownloadState(enabled);
+        toast(enabled ? "go2rtc log file enabled" : "go2rtc log file disabled");
+        if (enabled) {
+          loadLogs();
+        } else {
+          logPathBadge.textContent = "path: disk logging off";
+        }
+      } catch (err) {
+        logSaveToggle.checked = !enabled;
+        toast(err.message || "Failed to update log setting", "error");
+      }
+    });
+  }
+
   function stopFollow() {
     if (logFollowTimer) {
       clearInterval(logFollowTimer);
@@ -88,7 +153,10 @@ export function initLogsTab(root, { api, toast, filterLinesByLevel }) {
   }
 
   return {
-    start() {},
+    start() {
+      syncLogSavePreference();
+      loadLogs();
+    },
     stop() {
       stopFollow();
     },

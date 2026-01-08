@@ -11,3 +11,14 @@ textarea { font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
 .tapo-warning { font-size: 0.4em; }
 #dashboard { min-height: 200px; }
 #camCards { min-height: 200px; }
+.cam-probe-output { max-height: 360px; overflow: auto; }
+.cam-card { cursor: grab; user-select: none; }
+.cam-card .card-header { cursor: default; }
+.cam-drag-handle {
+  cursor: grab;
+  color: #6c757d;
+}
+.cam-drag-handle:active { cursor: grabbing; }
+.cam-drag-icon { display: block; fill: currentColor; }
+.sortable-ghost { opacity: 0.5; }
+.sortable-chosen { cursor: grabbing; }

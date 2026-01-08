@@ -1,4 +1,4 @@
-export function initCamerasTab(root, { api, toast }) {
+export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
   const camNameList = root.querySelector("#camNameList");
   const camStreamsContainer = root.querySelector("#camStreamsContainer");
   const camFriendlyInput = root.querySelector("#camFriendly");
@@ -37,6 +37,10 @@ export function initCamerasTab(root, { api, toast }) {
   const camProbeMsg = root.querySelector("#camProbeMsg");
   const camCompatibility = root.querySelector("#camCompatibility");
   const camStep2Status = root.querySelector("#camStep2Status");
+  const camProbePreviewSelect = root.querySelector("#camProbePreviewSelect");
+  const camProbePreviewCard = root.querySelector("#camProbePreviewCard");
+  const camProbeOutput = root.querySelector("#camProbeOutput");
+  const camProbeResult = root.querySelector("#camProbeResult");
 
   let webSettings = {};
   let streamsMap = {};
@@ -54,7 +58,13 @@ export function initCamerasTab(root, { api, toast }) {
         el.className = "text-muted small";
         return;
       }
-      el.textContent = status;
+      const normalized = String(status);
+      const lowered = normalized.toLowerCase();
+      const label =
+        lowered === "passed" || lowered === "failed" || lowered === "pending"
+          ? lowered.charAt(0).toUpperCase() + lowered.slice(1)
+          : normalized;
+      el.textContent = label;
       el.className = `text-muted small badge text-bg-${kind}`;
     }
   }
@@ -251,6 +261,73 @@ export function initCamerasTab(root, { api, toast }) {
     return { ok, message, kind, streamLabel, checklist };
   }
 
+  function parseStreamSelection(value) {
+    if (!value) return { name: "", channel: null };
+    const marker = "::";
+    const idx = value.lastIndexOf(marker);
+    if (idx === -1) return { name: value, channel: null };
+    const name = value.slice(0, idx);
+    const channel = value.slice(idx + marker.length);
+    return { name, channel: channel === "" ? null : Number(channel) };
+  }
+
+  function renderPreviewCard(selectionValue) {
+    if (!camProbePreviewCard) return;
+    const { name, channel } = parseStreamSelection(selectionValue);
+    if (!name || !buildFrameUrl) {
+      camProbePreviewCard.innerHTML = "";
+      return;
+    }
+    const imgUrl = buildFrameUrl(name, true, channel);
+    const linkUrl = buildFrameUrl(name, false, channel);
+    const label = (webSettings[name] && webSettings[name].friendly) || name;
+    const channelLabel = channel == null ? "" : ` (channel ${channel})`;
+    camProbePreviewCard.innerHTML = `
+      <div class="col-12 col-md-10 col-xl-8">
+        <div class="card shadow-sm h-100">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-semibold">${label}${channelLabel}</span>
+            <a class="small text-decoration-none" href="${linkUrl}" target="_blank" rel="noopener">Snapshot</a>
+          </div>
+          <div class="card-body">
+            <div class="ratio ratio-16x9 bg-body-tertiary rounded overflow-hidden">
+              <img src="${imgUrl}" alt="${label} snapshot" class="w-100 h-100 object-fit-cover" loading="lazy" onerror="this.style.display='none'; this.closest('.card-body').querySelector('.snapshot-fallback').classList.remove('d-none');">
+              <div class="snapshot-fallback text-muted small d-none d-flex align-items-center justify-content-center">Snapshot unavailable</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function updatePreviewSelect(selectedValue = "") {
+    if (!camProbePreviewSelect) return;
+    const current = selectedValue || camProbePreviewSelect.value || "";
+    camProbePreviewSelect.innerHTML = '<option value="">Select a stream…</option>';
+    Object.keys(streamsMap || {}).forEach((name) => {
+      const info = streamsMap[name] || {};
+      const producers = Array.isArray(info.producers) ? info.producers : [];
+      const friendly = (webSettings[name] && webSettings[name].friendly) || name;
+      if (producers.length > 1) {
+        producers.forEach((_, idx) => {
+          const opt = document.createElement("option");
+          opt.value = `${name}::${idx}`;
+          opt.textContent = `${friendly} (channel ${idx})`;
+          camProbePreviewSelect.appendChild(opt);
+        });
+      } else {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = friendly;
+        camProbePreviewSelect.appendChild(opt);
+      }
+    });
+    if (current) {
+      camProbePreviewSelect.value = current;
+    }
+    renderPreviewCard(camProbePreviewSelect.value);
+  }
+
   async function probeRow(row) {
     const nameInput = row.querySelector(".stream-name");
     const msg = row.querySelector(".stream-msg");
@@ -325,6 +402,10 @@ export function initCamerasTab(root, { api, toast }) {
     if (anyErr) setStepStatus(camStep2Status, "failed", "danger");
     else if (anyWarn) setStepStatus(camStep2Status, "needs attention", "warning");
     else if (anyOk) setStepStatus(camStep2Status, "ok", "success");
+    if (anyErr) return "fail";
+    if (anyWarn) return "warn";
+    if (anyOk) return "pass";
+    return "none";
   }
 
   function addStreamRow(initialName = "", initialRtsp = "") {
@@ -350,21 +431,48 @@ export function initCamerasTab(root, { api, toast }) {
   camProbeBtn?.addEventListener("click", async () => {
     if (!camProbeBtn || !camProbeMsg || !camCompatibility) return;
     camProbeBtn.disabled = true;
-    camProbeMsg.textContent = "Probing all streams…";
+    camProbeMsg.textContent = "Probing stream…";
     camProbeMsg.className = "text-muted small";
     camCompatibility.innerHTML = "";
+    if (camProbeOutput) camProbeOutput.innerHTML = "";
+    if (camProbeResult) camProbeResult.innerHTML = "";
     try {
       await probeAllStreams();
-      camProbeMsg.textContent = "Probe complete.";
-      camProbeMsg.className = "text-success small";
+      if (camProbePreviewSelect?.value) {
+        const { name, channel } = parseStreamSelection(camProbePreviewSelect.value);
+        const query = channel == null ? "" : `?channel=${encodeURIComponent(channel)}`;
+        const data = await api(`/api/flightcheck/${encodeURIComponent(name)}${query}`);
+        if (camProbeOutput) {
+          camProbeOutput.innerHTML = renderFlightCheckList(data);
+        }
+        if (camProbeResult) {
+          const passed = data && (data["All checks passed"] === true || data.ok === true);
+          if (passed) {
+            camProbeResult.innerHTML =
+              '<svg width="20" height="20" viewBox="0 0 20 20" aria-label="Passed" role="img" class="text-success"><circle cx="10" cy="10" r="9" fill="currentColor"></circle><path d="M6 10.5l2.2 2.3L14 7.8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-success small fw-semibold">Passed</span>';
+          } else {
+            camProbeResult.innerHTML =
+              '<svg width="20" height="20" viewBox="0 0 20 20" aria-label="Failed" role="img" class="text-danger"><circle cx="10" cy="10" r="9" fill="currentColor"></circle><path d="M6.5 6.5l7 7M13.5 6.5l-7 7" stroke="#fff" stroke-width="2" stroke-linecap="round"></path></svg><span class="text-danger small fw-semibold">Failed</span>';
+          }
+          setStepStatus(camStep2Status, passed ? "passed" : "failed", passed ? "success" : "danger");
+        }
+      }
+      camProbeMsg.textContent = "";
+      camProbeMsg.className = "text-muted small";
     } catch (err) {
       camCompatibility.innerHTML = "";
       camProbeMsg.textContent = err.message || "Probe failed.";
       camProbeMsg.className = "text-danger small";
       setStepStatus(camStep2Status, "failed", "danger");
+      if (camProbeOutput) camProbeOutput.textContent = err.message || "Probe failed.";
+      if (camProbeResult) camProbeResult.innerHTML = "";
     } finally {
       camProbeBtn.disabled = false;
     }
+  });
+
+  camProbePreviewSelect?.addEventListener("change", (event) => {
+    renderPreviewCard(event.target.value);
   });
 
   camAddExtraBtn2?.addEventListener("click", () => {
@@ -809,9 +917,11 @@ export function initCamerasTab(root, { api, toast }) {
           camNameList.appendChild(opt);
         });
       }
+      updatePreviewSelect();
       return streams;
     } catch {
       streamsMap = {};
+      updatePreviewSelect();
       return {};
     }
   }
@@ -873,8 +983,29 @@ export function initCamerasTab(root, { api, toast }) {
       updateCameraSelection();
       updateExistingStreamState();
       await probeAllStreams();
+      updatePreviewSelect();
       camFriendlyInput?.focus();
     },
     stop() {},
   };
 }
+  function renderFlightCheckList(data, level = 0) {
+    if (data == null) return "";
+    if (typeof data !== "object") {
+      return `<span>${String(data)}</span>`;
+    }
+    if (Array.isArray(data)) {
+      if (!data.length) return "<span>[]</span>";
+      return `<ul class="mb-0 ps-${Math.min(4, level + 2)}">${data
+        .map((item) => `<li>${renderFlightCheckList(item, level + 1)}</li>`)
+        .join("")}</ul>`;
+    }
+    const entries = Object.entries(data);
+    if (!entries.length) return "<span>{}</span>";
+    return `<ul class="mb-0 ps-${Math.min(4, level + 2)}">${entries
+      .map(([key, value]) => {
+        const rendered = renderFlightCheckList(value, level + 1);
+        return `<li><span class="fw-semibold">${key}:</span> ${rendered}</li>`;
+      })
+      .join("")}</ul>`;
+  }

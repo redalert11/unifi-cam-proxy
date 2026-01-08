@@ -17,6 +17,10 @@
                       <option value="WARN">Warn+</option>
                       <option value="ERROR">Error</option>
                     </select>
+                    <div class="form-check form-switch mb-0 d-flex align-items-center">
+                      <input class="form-check-input" type="checkbox" role="switch" id="logSaveToggle">
+                      <label class="form-check-label small ms-1" for="logSaveToggle">Save to disk</label>
+                    </div>
                     <button class="btn btn-sm btn-outline-secondary" id="logRefresh"><i class="bi bi-arrow-repeat me-1"></i>Refresh</button>
                     <button class="btn btn-sm btn-outline-success" id="logFollow"><i class="bi bi-play-fill me-1"></i>Follow</button>
                     <a class="btn btn-sm btn-outline-primary" id="logDownload" href="/api/go2rtc/logs/download" download>

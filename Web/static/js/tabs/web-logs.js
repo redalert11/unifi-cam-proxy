@@ -6,12 +6,30 @@ export function initWebLogsTab(root, { api, toast, filterLinesByLevel }) {
   const webLogDownload = root.querySelector("#webLogDownload");
   const webLogLevelSelect = root.querySelector("#webLogLevel");
   const webLogFollowBtn = root.querySelector("#webLogFollow");
+  const webLogSaveToggle = root.querySelector("#webLogSaveToggle");
 
   if (!webLogRefreshBtn || !webLogLinesInput || !webLogBox) {
     return { start() {}, stop() {} };
   }
 
   let webLogFollowTimer = null;
+  let webLogSaveEnabled = true;
+
+  const updateDownloadState = (enabled) => {
+    webLogSaveEnabled = !!enabled;
+    if (webLogDownload) {
+      webLogDownload.classList.toggle("disabled", !enabled);
+      webLogDownload.setAttribute("aria-disabled", enabled ? "false" : "true");
+      if (enabled) {
+        webLogDownload.href = "/api/web/logs/download";
+      } else {
+        webLogDownload.removeAttribute("href");
+      }
+    }
+    if (webLogPathBadge && !enabled) {
+      webLogPathBadge.textContent = "path: disk logging off";
+    }
+  };
 
   async function loadWebLogs({ scroll = false } = {}) {
     let lines = parseInt(webLogLinesInput.value, 10);
@@ -24,14 +42,30 @@ export function initWebLogsTab(root, { api, toast, filterLinesByLevel }) {
     webLogRefreshBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
     try {
       const data = await api(`/api/web/logs?lines=${lines}`);
+      if (typeof data?.log_to_disk === "boolean") {
+        if (webLogSaveToggle) webLogSaveToggle.checked = data.log_to_disk;
+        updateDownloadState(data.log_to_disk);
+      }
       const filtered = filterLinesByLevel(data?.lines || [], webLogLevelSelect?.value || "ALL");
       webLogBox.textContent = filtered.length ? filtered.join("\n") : "(empty)";
       if (scroll) {
         webLogBox.scrollTop = webLogBox.scrollHeight;
       }
-      if (webLogPathBadge && (data?.path_rel || data?.path)) {
-        webLogPathBadge.textContent = `path: ${data.path_rel || data.path}`;
-        if (webLogDownload) webLogDownload.href = "/api/web/logs/download";
+      if (webLogPathBadge) {
+        if (data?.path_rel || data?.path) {
+          webLogPathBadge.textContent = `path: ${data.path_rel || data.path}`;
+        } else if (!webLogSaveEnabled) {
+          webLogPathBadge.textContent = "path: disk logging off";
+        } else {
+          webLogPathBadge.textContent = "path: -";
+        }
+        if (webLogDownload) {
+          if (webLogSaveEnabled) {
+            webLogDownload.href = "/api/web/logs/download";
+          } else {
+            webLogDownload.removeAttribute("href");
+          }
+        }
       }
     } catch (err) {
       webLogBox.textContent = "Failed to load logs.";
@@ -75,6 +109,33 @@ export function initWebLogsTab(root, { api, toast, filterLinesByLevel }) {
     if (saved) webLogLevelSelect.value = saved;
   }
 
+  async function syncWebLogSavePreference() {
+    if (!webLogSaveToggle) return;
+    try {
+      const settings = await api("/api/settings");
+      const enabled = settings?.save_web_logs !== false;
+      webLogSaveToggle.checked = enabled;
+      updateDownloadState(enabled);
+    } catch (err) {
+      toast("Failed to load settings for log toggle", "error");
+    }
+  }
+
+  if (webLogSaveToggle) {
+    webLogSaveToggle.addEventListener("change", async () => {
+      const enabled = webLogSaveToggle.checked;
+      try {
+        await api("/api/settings", { method: "PUT", body: JSON.stringify({ save_web_logs: enabled }) });
+        updateDownloadState(enabled);
+        toast(enabled ? "web log file enabled" : "web log file disabled");
+        loadWebLogs();
+      } catch (err) {
+        webLogSaveToggle.checked = !enabled;
+        toast(err.message || "Failed to update log setting", "error");
+      }
+    });
+  }
+
   function stopFollow() {
     if (webLogFollowTimer) {
       clearInterval(webLogFollowTimer);
@@ -88,7 +149,10 @@ export function initWebLogsTab(root, { api, toast, filterLinesByLevel }) {
   }
 
   return {
-    start() {},
+    start() {
+      syncWebLogSavePreference();
+      loadWebLogs();
+    },
     stop() {
       stopFollow();
     },

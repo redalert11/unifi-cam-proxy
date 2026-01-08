@@ -1,5 +1,7 @@
 import json
 import hashlib
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
@@ -38,10 +40,17 @@ static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-manager = Go2RTCManager()
-
 web_settings_path = Path(__file__).resolve().parent / "data" / "web_settings.json"
-web_settings_store = SettingsManager(web_settings_path, defaults={"autostart_go2rtc": False})
+web_settings_store = SettingsManager(
+    web_settings_path,
+    defaults={
+        "autostart_go2rtc": False,
+        "save_go2rtc_logs": True,
+        "save_web_logs": True,
+    },
+)
+
+manager = Go2RTCManager(log_to_disk=web_settings_store.get("save_go2rtc_logs", True))
 
 GO2RTC_API = "http://127.0.0.1:1984"
 
@@ -56,6 +65,43 @@ def go2rtc_api(path: str, method: str = "GET", params=None, json_body=None, time
         return resp.text
 
 web_log_path = (Path(__file__).resolve().parent.parent / "logs" / "webserver.log").resolve()
+WEB_LOG_MAX_BYTES = 5_000_000
+WEB_LOG_BACKUP_COUNT = 3
+
+
+def _set_web_file_logging(enabled: bool):
+    """
+    Enable/disable uvicorn file logging at runtime by attaching/removing the rotating file handler.
+    """
+    loggers = ["uvicorn", "uvicorn.error", "uvicorn.access"]
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S")
+    for name in loggers:
+        lg = logging.getLogger(name)
+        # remove handlers pointing at our log file
+        for h in list(lg.handlers):
+            fname = getattr(h, "baseFilename", None)
+            if fname and Path(fname) == web_log_path:
+                if not enabled:
+                    lg.removeHandler(h)
+                    try:
+                        h.close()
+                    except Exception:
+                        pass
+        if not enabled:
+            continue
+        # attach if missing
+        has_handler = any(
+            isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")) == web_log_path
+            for h in lg.handlers
+        )
+        if not has_handler:
+            web_log_path.parent.mkdir(parents=True, exist_ok=True)
+            fh = RotatingFileHandler(web_log_path, maxBytes=WEB_LOG_MAX_BYTES, backupCount=WEB_LOG_BACKUP_COUNT)
+            fh.setFormatter(formatter)
+            lg.addHandler(fh)
+
+# Apply saved preference on startup (module import)
+_set_web_file_logging(web_settings_store.get("save_web_logs", True))
 
 
 def read_log_tail(path: Path, max_lines: int = 200):
@@ -458,24 +504,43 @@ def web_settings_update(settings: dict = Body(...)):
     if not isinstance(settings, dict):
         raise HTTPException(status_code=400, detail="settings must be an object")
     web_settings_store.update(settings)
+    if "save_go2rtc_logs" in settings:
+        manager.set_log_to_disk(bool(settings["save_go2rtc_logs"]))
+    if "save_web_logs" in settings:
+        _set_web_file_logging(bool(settings["save_web_logs"]))
     return web_settings_store.all()
 
 
 @app.get("/api/go2rtc/logs")
 def go2rtc_logs(lines: int = Query(200, ge=1, le=2000)):
     content = manager.read_log_tail(lines)
-    if content is None:
+    file_logging = manager.is_file_logging_active()
+    if file_logging and content is None:
         raise HTTPException(status_code=404, detail="log file not found")
+    resp = {
+        "lines": content or [],
+        "count": len(content or []),
+        "log_to_disk": manager.log_to_disk,
+    }
     abs_path = Path(manager.log_path).resolve()
-    try:
-        rel_path = abs_path.relative_to(Path.cwd())
-    except ValueError:
-        rel_path = abs_path
-    return {"lines": content, "path": str(abs_path), "path_rel": str(rel_path), "count": len(content)}
+    if file_logging and abs_path.exists():
+        try:
+            rel_path = abs_path.relative_to(Path.cwd())
+        except ValueError:
+            rel_path = abs_path
+        resp["path"] = str(abs_path)
+        resp["path_rel"] = str(rel_path)
+    else:
+        resp["path"] = None
+        resp["path_rel"] = None
+    return resp
 
 
 @app.get("/api/go2rtc/logs/download")
 def go2rtc_logs_download():
+    file_logging = manager.is_file_logging_active()
+    if not file_logging:
+        raise HTTPException(status_code=404, detail="log saving to disk is disabled")
     if not manager.log_path.exists():
         raise HTTPException(status_code=404, detail="log file not found")
     return FileResponse(manager.log_path, media_type="text/plain", filename=manager.log_path.name)
@@ -483,19 +548,28 @@ def go2rtc_logs_download():
 
 @app.get("/api/web/logs")
 def web_logs(lines: int = Query(200, ge=1, le=2000)):
-    content = read_log_tail(web_log_path, lines)
-    if content is None:
+    log_to_disk = bool(web_settings_store.get("save_web_logs", True))
+    content = read_log_tail(web_log_path, lines) if log_to_disk else []
+    if log_to_disk and content is None:
         raise HTTPException(status_code=404, detail="log file not found")
     abs_path = web_log_path
     try:
         rel_path = abs_path.relative_to(Path.cwd())
     except ValueError:
         rel_path = abs_path
-    return {"lines": content, "path": str(abs_path), "path_rel": str(rel_path), "count": len(content)}
+    return {
+        "lines": content or [],
+        "path": str(abs_path) if log_to_disk else None,
+        "path_rel": str(rel_path) if log_to_disk else None,
+        "count": len(content or []),
+        "log_to_disk": log_to_disk,
+    }
 
 
 @app.get("/api/web/logs/download")
 def web_logs_download():
+    if not web_settings_store.get("save_web_logs", True):
+        raise HTTPException(status_code=404, detail="web log saving is disabled")
     if not web_log_path.exists():
         raise HTTPException(status_code=404, detail="log file not found")
     return FileResponse(web_log_path, media_type="text/plain", filename=web_log_path.name)

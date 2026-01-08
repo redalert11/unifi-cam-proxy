@@ -41,8 +41,9 @@ export function go2rtcBaseUrl() {
   return `http://${location.hostname}:1984`;
 }
 
-export function buildFrameUrl(name, cacheBust = false) {
+export function buildFrameUrl(name, cacheBust = false, channel = null) {
   const base = `${go2rtcBaseUrl()}/api/frame.jpeg?src=${encodeURIComponent(name)}`;
-  if (!cacheBust) return base;
-  return `${base}&t=${Date.now()}`;
+  const withChannel = channel == null ? base : `${base}&channel=${encodeURIComponent(channel)}`;
+  if (!cacheBust) return withChannel;
+  return `${withChannel}&t=${Date.now()}`;
 }
