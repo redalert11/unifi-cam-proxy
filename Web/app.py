@@ -4,6 +4,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlparse
+from datetime import datetime
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
@@ -18,12 +20,29 @@ except ImportError:
     from ..Unifi.utils.settings_manager import SettingsManager  # type: ignore
 
 try:
+    from Unifi.camera_data.camera_models import CameraModelDatabase
+except ImportError:
+    CameraModelDatabase = None  # type: ignore
+
+try:
     from .flight_check import check_url as flight_check_url
+    from .flight_check import resolve_mac as flight_check_resolve_mac
+    from .flight_check import apply_onvif_encoder_settings as onvif_apply_encoder_settings
+    from .flight_check import apply_onvif_encoder_for_profile as onvif_apply_encoder_for_profile
+    from .flight_check import apply_onvif_encoder_max_resolution as onvif_apply_encoder_max_resolution
 except ImportError:
     try:
         from Web.flight_check import check_url as flight_check_url
+        from Web.flight_check import resolve_mac as flight_check_resolve_mac
+        from Web.flight_check import apply_onvif_encoder_settings as onvif_apply_encoder_settings
+        from Web.flight_check import apply_onvif_encoder_for_profile as onvif_apply_encoder_for_profile
+        from Web.flight_check import apply_onvif_encoder_max_resolution as onvif_apply_encoder_max_resolution
     except ImportError:
         flight_check_url = None  # type: ignore
+        flight_check_resolve_mac = None  # type: ignore
+        onvif_apply_encoder_settings = None  # type: ignore
+        onvif_apply_encoder_for_profile = None  # type: ignore
+        onvif_apply_encoder_max_resolution = None  # type: ignore
 
 try:
     from .go2rtc_manager import Go2RTCManager
@@ -33,6 +52,14 @@ except ImportError:
         from Web.go2rtc_manager import Go2RTCManager
     except ImportError:
         from go2rtc_manager import Go2RTCManager
+
+try:
+    from Unifi.services.runtime import ServiceRuntime
+except ImportError:
+    try:
+        from .services.runtime import ServiceRuntime  # type: ignore
+    except ImportError:
+        ServiceRuntime = None  # type: ignore
 
 app = FastAPI(title="UniFi Cam Proxy Supervisor", version="0.1.0")
 
@@ -50,6 +77,20 @@ web_settings_store = SettingsManager(
     },
 )
 
+process_state_path = Path(__file__).resolve().parent / "data" / "process_state.json"
+process_state_store = SettingsManager(
+    process_state_path,
+    defaults={
+        "discovery": {
+            "running": False,
+            "camera": "",
+            "started_at": "",
+            "last_error": "",
+        },
+        "cameras": {},
+    },
+)
+
 manager = Go2RTCManager(log_to_disk=web_settings_store.get("save_go2rtc_logs", True))
 
 GO2RTC_API = "http://127.0.0.1:1984"
@@ -64,9 +105,208 @@ def go2rtc_api(path: str, method: str = "GET", params=None, json_body=None, time
     except Exception:
         return resp.text
 
+
+def _extract_stream_source_url(stream_payload, stream_name: str) -> str:
+    """
+    Best-effort extraction of the first producer URL for a stream name.
+    """
+    if isinstance(stream_payload, dict) and "producers" in stream_payload:
+        producers = stream_payload.get("producers") or []
+        if isinstance(producers, list) and producers:
+            first = producers[0]
+            if isinstance(first, dict):
+                return str(first.get("url") or "")
+            return str(first)
+    # Fallback: some go2rtc builds return a dict keyed by stream name
+    if isinstance(stream_payload, dict) and stream_name in stream_payload:
+        entry = stream_payload.get(stream_name)
+        if isinstance(entry, dict):
+            return _extract_stream_source_url(entry, stream_name)
+    return ""
+
+
+def _extract_stream_source_by_index(stream_payload, stream_name: str, index: int) -> str:
+    if isinstance(stream_payload, dict) and "producers" in stream_payload:
+        producers = stream_payload.get("producers") or []
+        if isinstance(producers, list) and len(producers) > index:
+            entry = producers[index]
+            if isinstance(entry, dict):
+                return str(entry.get("url") or "")
+            return str(entry)
+    if isinstance(stream_payload, dict) and "streams" in stream_payload:
+        entry = stream_payload.get("streams", {}).get(stream_name)
+        if entry is not None:
+            return _extract_stream_source_by_index(entry, stream_name, index)
+    if isinstance(stream_payload, dict) and stream_name in stream_payload:
+        entry = stream_payload.get(stream_name)
+        if entry is not None:
+            return _extract_stream_source_by_index(entry, stream_name, index)
+    return ""
+
+
+def _extract_stream_source_from_config(stream_name: str) -> str:
+    """
+    Read go2rtc config and return the first source URL for a stream name.
+    """
+    content = manager.read_config() or ""
+    try:
+        data = yaml.safe_load(content) if content else {}
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    streams = data.get("streams")
+    if not isinstance(streams, dict):
+        return ""
+    entry = streams.get(stream_name)
+    if entry is None:
+        return ""
+    if isinstance(entry, list):
+        return str(entry[0]) if entry else ""
+    if isinstance(entry, dict):
+        # go2rtc supports {source: ...} or {urls: [...]}
+        if "source" in entry:
+            return str(entry.get("source") or "")
+        if "urls" in entry and isinstance(entry["urls"], list) and entry["urls"]:
+            return str(entry["urls"][0])
+        # if nested name, ignore
+        return ""
+    return str(entry)
+
+
+def _get_stream_source_from_config(stream_name: str, channel: int | None = None) -> str:
+    content = manager.read_config() or ""
+    try:
+        data = yaml.safe_load(content) if content else {}
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        return ""
+    streams = data.get("streams")
+    if not isinstance(streams, dict):
+        return ""
+    entry = streams.get(stream_name)
+    if entry is None:
+        return ""
+    if isinstance(entry, list):
+        if channel is not None and channel < len(entry):
+            return str(entry[channel])
+        return str(entry[0]) if entry else ""
+    if isinstance(entry, dict):
+        if "source" in entry:
+            return str(entry.get("source") or "")
+        if "urls" in entry and isinstance(entry["urls"], list) and entry["urls"]:
+            return str(entry["urls"][0])
+        return ""
+    return str(entry)
+
+
+def _yaml_quote(value: str) -> str:
+    if value == "" or any(ch in value for ch in [' ', '"', "'", "#", ":", "&", "?", "[", "]", "{", "}", ","]):
+        escaped = value.replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+def _upsert_stream_config(content: str, name: str, src: str) -> str:
+    lines = content.splitlines()
+    streams_idx = next((i for i, line in enumerate(lines) if line.strip() == "streams:"), None)
+    if streams_idx is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        streams_idx = len(lines)
+        lines.append("streams:")
+    insert_at = streams_idx + 1
+    while insert_at < len(lines):
+        line = lines[insert_at]
+        if line.strip() == "":
+            insert_at += 1
+            continue
+        if not line.startswith(" "):
+            break
+        insert_at += 1
+
+    def _find_stream_block() -> tuple[int | None, int | None]:
+        start = None
+        end = None
+        for i in range(streams_idx + 1, len(lines)):
+            line = lines[i]
+            if line.strip() == "":
+                continue
+            if not line.startswith(" "):
+                break
+            if line.startswith("  ") and not line.startswith("    "):
+                key = line.strip().split(":", 1)[0]
+                if key == name:
+                    start = i
+                    end = i + 1
+                    while end < len(lines):
+                        next_line = lines[end]
+                        if next_line.strip() == "":
+                            end += 1
+                            continue
+                        if not next_line.startswith(" "):
+                            break
+                        if next_line.startswith("  ") and not next_line.startswith("    "):
+                            break
+                        end += 1
+                    return start, end
+        return None, None
+
+    entry_line = f"  {name}: {_yaml_quote(src)}"
+    start, end = _find_stream_block()
+    if start is not None and end is not None:
+        lines[start:end] = [entry_line]
+    else:
+        lines[insert_at:insert_at] = [entry_line]
+
+    return "\n".join(lines) + ("\n" if content.endswith("\n") or not content else "")
+
+
+def _resolve_mac_for_stream(stream_name: str, stream_channel: int | None, mac_mode: str) -> dict:
+    if mac_mode not in ("lookup", "random"):
+        raise HTTPException(status_code=400, detail="macMode must be lookup or random")
+    if mac_mode == "lookup" and not stream_name:
+        raise HTTPException(status_code=400, detail="stream is required for MAC lookup")
+    if flight_check_resolve_mac is None:
+        raise HTTPException(status_code=500, detail="MAC resolver not available")
+
+    stream_url = ""
+    if stream_name:
+        stream_url = f"{GO2RTC_API}/api/stream.flv?src={stream_name}"
+        if stream_channel is not None:
+            stream_url += f"&channel={stream_channel}"
+
+    if mac_mode == "lookup":
+        source_url = _extract_stream_source_from_config(stream_name) if stream_name else ""
+        if not source_url:
+            stream_payload = go2rtc_api(f"/api/streams/{stream_name}") if stream_name else {}
+            source_url = _extract_stream_source_url(stream_payload, stream_name)
+        if not source_url:
+            raise HTTPException(status_code=400, detail="MAC lookup failed: stream source URL not found")
+        mac_report = flight_check_resolve_mac(source_url, mac_mode=mac_mode)
+    else:
+        mac_report = flight_check_resolve_mac(stream_url, mac_mode=mac_mode)
+    mac_value = mac_report.get("value")
+    if not mac_value:
+        raise HTTPException(status_code=400, detail="MAC lookup failed")
+    mac_value = str(mac_value).upper()
+    return {"mac": mac_value, "report": mac_report}
+
 web_log_path = (Path(__file__).resolve().parent.parent / "logs" / "webserver.log").resolve()
 WEB_LOG_MAX_BYTES = 5_000_000
 WEB_LOG_BACKUP_COUNT = 3
+
+_unifi_runtime = None
+
+
+def _get_unifi_runtime():
+    global _unifi_runtime
+    if ServiceRuntime is None:
+        raise HTTPException(status_code=500, detail="Unifi runtime not available")
+    if _unifi_runtime is None:
+        _unifi_runtime = ServiceRuntime()
+    return _unifi_runtime
 
 
 def _set_web_file_logging(enabled: bool):
@@ -297,6 +537,82 @@ def go2rtc_persist_streams(streams: list[dict] = Body(..., embed=True)):
     return {"message": "streams persisted", "count": added, "config_path": manager.config_path, "content": content}
 
 
+@app.post("/api/go2rtc/streams/force-transcode")
+def go2rtc_force_transcode(payload: dict = Body(...)):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="stream name is required")
+    channel = payload.get("channel")
+    if isinstance(channel, str) and channel.isdigit():
+        channel = int(channel)
+    elif not isinstance(channel, int):
+        channel = None
+
+    src = _get_stream_source_from_config(name, channel=channel)
+    if not src:
+        raise HTTPException(status_code=404, detail="stream source not found in config")
+    if src.startswith(GO2RTC_API) or "/api/stream.flv?src=" in src or src.startswith("tapo://") or src.startswith("onvif://"):
+        try:
+            stream_payload = go2rtc_api(f"/api/streams/{name}")
+            producer_url = _extract_stream_source_by_index(stream_payload, name, channel or 0)
+            if producer_url:
+                src = producer_url
+        except Exception:
+            pass
+    if src.startswith("tapo://") or src.startswith("onvif://"):
+        raise HTTPException(status_code=400, detail="ffmpeg requires RTSP/HTTP source; stream source is not compatible")
+    if src.startswith("exec:"):
+        raise HTTPException(status_code=400, detail="stream already uses exec")
+
+    summary = payload.get("summary") or {}
+    video = summary.get("video") or {}
+    width = video.get("width")
+    height = video.get("height")
+    fps = (video.get("avg_frame_rate") or {}).get("value") or (video.get("r_frame_rate") or {}).get("value")
+    try:
+        width = int(width) if width else None
+    except Exception:
+        width = None
+    try:
+        height = int(height) if height else None
+    except Exception:
+        height = None
+    try:
+        fps = float(fps) if fps else None
+    except Exception:
+        fps = None
+
+    if width and width >= 1600:
+        bitrate = "4000k"
+    elif width and width >= 1280:
+        bitrate = "2500k"
+    elif width and width >= 960:
+        bitrate = "1500k"
+    else:
+        bitrate = "800k"
+
+    size_arg = f"-s {width}x{height}" if width and height else ""
+    fps_arg = f"-r {int(round(fps))}" if fps else ""
+
+    cmd = (
+        f"exec:ffmpeg -hide_banner -rtsp_transport tcp -i {src} "
+        f"-c:v libx264 -profile:v main -level:v 4.1 -preset ultrafast -bf 0 "
+        f"-pix_fmt yuvj420p {size_arg} {fps_arg} -b:v {bitrate} -g 40 -keyint_min 20 "
+        f"-an -f flv -"
+    )
+    cmd = " ".join(cmd.split())
+
+    content = manager.read_config() or ""
+    updated = _upsert_stream_config(content, name, cmd)
+    manager.write_config(updated)
+    status = manager.reload()
+    if not status.running:
+        status = manager.start()
+        if not status.running:
+            raise HTTPException(status_code=400, detail=status.message or "failed to restart go2rtc")
+    return {"message": "transcode enabled", "name": name, "cmd": cmd}
+
+
 @app.get("/api/go2rtc/streams/{name}/probe")
 def go2rtc_probe_stream(name: str):
     status = manager.status()
@@ -468,11 +784,64 @@ def go2rtc_onvif_profiles(
 
     params = {"src": src}
 
+    def _ensure_rtsp_creds(uri: str, user: str, pwd: str) -> str:
+        if not uri or not user:
+            return uri
+        try:
+            parsed_uri = urlparse(uri)
+            if parsed_uri.scheme.lower() != "rtsp":
+                return uri
+            if parsed_uri.username:
+                return uri
+            netloc = parsed_uri.hostname or parsed_uri.netloc or ""
+            if parsed_uri.port:
+                netloc += f":{parsed_uri.port}"
+            creds = user if not pwd else f"{user}:{pwd}"
+            netloc = f"{creds}@{netloc}"
+            return parsed_uri._replace(netloc=netloc).geturl()
+        except Exception:
+            return uri
+
     try:
         data = go2rtc_api("/api/onvif", params=params, timeout=8.0)
         sources = []
         if isinstance(data, dict) and "sources" in data and isinstance(data["sources"], list):
             sources = data["sources"]
+        profile_streams = {}
+        try:
+            try:
+                from .onvif_client import OnvifSoapClient
+            except ImportError:
+                from Web.onvif_client import OnvifSoapClient  # type: ignore
+            client = OnvifSoapClient(
+                host=parsed.hostname or host,
+                port=parsed.port or 80,
+                username=user,
+                password=pwd,
+                https=parsed.scheme == "onvifs",
+            )
+            device_url = client.endpoint("/onvif/device_service")
+            media_url = client.get_media_xaddr(device_url) or device_url
+            profiles = client.get_profiles(media_url, include_streams=True)
+            for prof in profiles:
+                token = prof.get("token")
+                uri = prof.get("stream_uri")
+                if uri:
+                    uri = _ensure_rtsp_creds(str(uri), user, pwd)
+                if token and uri:
+                    profile_streams[str(token)] = str(uri)
+        except Exception:
+            profile_streams = {}
+        if profile_streams:
+            for src in sources:
+                url = src.get("url") if isinstance(src, dict) else ""
+                if not url:
+                    continue
+                parsed_url = urlparse(url)
+                query = dict(parse_qsl(parsed_url.query))
+                token = query.get("subtype") or query.get("profile") or query.get("token")
+                if token and token in profile_streams:
+                    src["stream_uri"] = profile_streams[token]
         return {"sources": sources, "src": src}
     except requests.HTTPError as exc:
         detail = exc.response.text if exc.response is not None else str(exc)
@@ -481,8 +850,125 @@ def go2rtc_onvif_profiles(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.post("/api/onvif/encoder/apply")
+def onvif_apply_encoder(payload: dict = Body(...)):
+    if onvif_apply_encoder_settings is None:
+        raise HTTPException(status_code=500, detail="ONVIF encoder setter not available")
+    host = (payload.get("host") or "").strip()
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    config = payload.get("config") or {}
+    if not host or not username or not password:
+        raise HTTPException(status_code=400, detail="host, username, and password are required")
+    if not isinstance(config, dict) or not config:
+        raise HTTPException(status_code=400, detail="config is required")
+    port = payload.get("port")
+    if isinstance(port, str) and port.isdigit():
+        port = int(port)
+    elif not isinstance(port, int):
+        port = None
+    result = onvif_apply_encoder_settings(
+        host=host,
+        username=username,
+        password=password,
+        config=config,
+        port=port,
+        is_tapo=bool(payload.get("is_tapo")),
+        device_path=payload.get("device_path") or "/onvif/device_service",
+        https=bool(payload.get("https")),
+        auth_mode=payload.get("auth_mode") or "digest",
+        wsse_mode=payload.get("wsse_mode") or "digest",
+    )
+    return result
+
+
+@app.post("/api/onvif/encoder/apply-for-stream")
+def onvif_apply_encoder_for_stream(payload: dict = Body(...)):
+    if onvif_apply_encoder_for_profile is None:
+        raise HTTPException(status_code=500, detail="ONVIF encoder setter not available")
+    host = (payload.get("host") or "").strip()
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    width = payload.get("width")
+    height = payload.get("height")
+    if not host or not username or not password:
+        raise HTTPException(status_code=400, detail="host, username, and password are required")
+    try:
+        width = int(width)
+        height = int(height)
+    except Exception:
+        raise HTTPException(status_code=400, detail="width and height are required")
+    port = payload.get("port")
+    if isinstance(port, str) and port.isdigit():
+        port = int(port)
+    elif not isinstance(port, int):
+        port = None
+    result = onvif_apply_encoder_for_profile(
+        host=host,
+        username=username,
+        password=password,
+        width=width,
+        height=height,
+        port=port,
+        is_tapo=bool(payload.get("is_tapo")),
+        device_path=payload.get("device_path") or "/onvif/device_service",
+        https=bool(payload.get("https")),
+        auth_mode=payload.get("auth_mode") or "digest",
+        wsse_mode=payload.get("wsse_mode") or "digest",
+        profile=payload.get("profile") or "Main",
+        quality=payload.get("quality"),
+        framerate_limit=payload.get("framerate_limit"),
+        bitrate=payload.get("bitrate"),
+        gov_length=payload.get("gov_length"),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "ONVIF apply failed")
+    return result
+
+
+@app.post("/api/onvif/encoder/apply-max")
+def onvif_apply_encoder_max(payload: dict = Body(...)):
+    if onvif_apply_encoder_max_resolution is None:
+        raise HTTPException(status_code=500, detail="ONVIF encoder setter not available")
+    host = (payload.get("host") or "").strip()
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    if not host or not username or not password:
+        raise HTTPException(status_code=400, detail="host, username, and password are required")
+    port = payload.get("port")
+    if isinstance(port, str) and port.isdigit():
+        port = int(port)
+    elif not isinstance(port, int):
+        port = None
+    result = onvif_apply_encoder_max_resolution(
+        host=host,
+        username=username,
+        password=password,
+        port=port,
+        is_tapo=bool(payload.get("is_tapo")),
+        device_path=payload.get("device_path") or "/onvif/device_service",
+        https=bool(payload.get("https")),
+        auth_mode=payload.get("auth_mode") or "digest",
+        wsse_mode=payload.get("wsse_mode") or "digest",
+        profile=payload.get("profile") or "Main",
+        quality=payload.get("quality"),
+        framerate_limit=payload.get("framerate_limit"),
+        bitrate=payload.get("bitrate"),
+        gov_length=payload.get("gov_length"),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "ONVIF apply failed")
+    return result
+
+
 @app.get("/api/flightcheck/{name}")
-def flightcheck_stream(name: str, url: Optional[str] = Query(None, description="Optional full URL to probe")):
+def flightcheck_stream(
+    name: str,
+    url: Optional[str] = Query(None, description="Optional full URL to probe"),
+    channel: Optional[int] = Query(None, description="Optional go2rtc channel index"),
+    full: bool = Query(False, description="Include full ffprobe payload and summary"),
+    mac: str = Query("lookup", description="MAC source: lookup or random"),
+):
     if flight_check_url is None:
         raise HTTPException(status_code=500, detail="flight_check not available")
     status = manager.status()
@@ -490,8 +976,253 @@ def flightcheck_stream(name: str, url: Optional[str] = Query(None, description="
         # best-effort start
         manager.start()
     target_url = url or f"http://127.0.0.1:1984/api/stream.flv?src={name}"
-    result = flight_check_url(target_url)
+    if channel is not None:
+        try:
+            parsed = urlparse(target_url)
+            query = dict(parse_qsl(parsed.query))
+            query["channel"] = str(channel)
+            target_url = parsed._replace(query=urlencode(query)).geturl()
+        except Exception:
+            joiner = "&" if "?" in target_url else "?"
+            target_url = f"{target_url}{joiner}channel={channel}"
+    result = flight_check_url(target_url, full=full, mac_mode=mac)
     return result
+
+
+@app.get("/api/unifi/status")
+def unifi_status():
+    runtime = _get_unifi_runtime()
+    status = runtime.status()
+    discovery_state = process_state_store.all().get("discovery", {})
+    return {
+        "api": status.api.__dict__,
+        "discovery": status.discovery.__dict__,
+        "wss": status.wss.__dict__,
+        "upload": status.upload.__dict__,
+        "discovery_lock": discovery_state,
+    }
+
+
+@app.get("/api/unifi/camera-models")
+def unifi_camera_models():
+    if CameraModelDatabase is None:
+        raise HTTPException(status_code=500, detail="Camera model database not available")
+    models = sorted(set(CameraModelDatabase.CameraPlatformsByType.keys()))
+    return {"models": models, "eol": CameraModelDatabase.EOLCameraTypes}
+
+
+@app.post("/api/unifi/settings/resolve-mac")
+def unifi_resolve_mac(payload: dict = Body(...)):
+    mac_mode = (payload.get("macMode") or "lookup").strip().lower()
+    stream = payload.get("stream")
+    if stream is None:
+        streams = payload.get("streams") or []
+        stream = streams[0] if streams else ""
+    stream_name = ""
+    stream_channel = None
+    if isinstance(stream, str):
+        stream_name = stream
+    elif isinstance(stream, dict):
+        stream_name = stream.get("name") or ""
+        stream_channel = stream.get("channel")
+    if "::" in stream_name:
+        name_part, channel_part = stream_name.split("::", 1)
+        stream_name = name_part
+        if channel_part.isdigit():
+            stream_channel = int(channel_part)
+
+    resolved = _resolve_mac_for_stream(stream_name, stream_channel, mac_mode)
+    mac_value = resolved["mac"]
+    filename = f"{mac_value.replace(':', '').upper()}_Settings.json"
+    out_dir = Path(__file__).resolve().parent.parent / "Unifi" / "camera_data"
+    exists = (out_dir / filename).exists()
+
+    return {
+        "mac": mac_value,
+        "filename": filename,
+        "exists": exists,
+    }
+
+
+@app.post("/api/unifi/settings/generate")
+def unifi_generate_settings(payload: dict = Body(...)):
+    if CameraModelDatabase is None:
+        raise HTTPException(status_code=500, detail="Camera model database not available")
+    model = (payload.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    mac_mode = (payload.get("macMode") or "lookup").strip().lower()
+    streams = payload.get("streams") or []
+    first_stream = next((s for s in streams if s), "")
+    stream_name = ""
+    stream_channel = None
+    if isinstance(first_stream, str):
+        stream_name = first_stream
+    elif isinstance(first_stream, dict):
+        stream_name = first_stream.get("name") or ""
+        stream_channel = first_stream.get("channel")
+    if "::" in stream_name:
+        name_part, channel_part = stream_name.split("::", 1)
+        stream_name = name_part
+        if channel_part.isdigit():
+            stream_channel = int(channel_part)
+
+    mac_value = (payload.get("mac") or "").strip().upper()
+    if not mac_value:
+        resolved = _resolve_mac_for_stream(stream_name, stream_channel, mac_mode)
+        mac_value = resolved["mac"]
+
+    from Unifi.camera_data.camera_settings import CameraSettings
+
+    filename = f"{mac_value.replace(':', '').upper()}_Settings.json"
+    out_dir = Path(__file__).resolve().parent.parent / "Unifi" / "camera_data"
+    out_path = out_dir / filename
+    if out_path.exists():
+        raise HTTPException(status_code=409, detail="File already exists")
+
+    streams_section = {}
+    mapped = []
+    summaries = payload.get("streamSummaries") or []
+    for idx, entry in enumerate(streams):
+        if not entry:
+            continue
+        if isinstance(entry, dict):
+            stream_name = entry.get("name") or ""
+            stream_channel = entry.get("channel")
+        else:
+            stream_name = entry
+            stream_channel = None
+        if "::" in stream_name:
+            name_part, channel_part = stream_name.split("::", 1)
+            stream_name = name_part
+            if channel_part.isdigit():
+                stream_channel = int(channel_part)
+        if not stream_name:
+            continue
+        channel_label = f"{stream_name}:{stream_channel}" if stream_channel is not None else stream_name
+        stream_url = f"{GO2RTC_API}/api/stream.flv?src={stream_name}" + (
+            f"&channel={stream_channel}" if stream_channel is not None else ""
+        )
+        summary = {}
+        if idx < len(summaries) and isinstance(summaries[idx], dict):
+            summary = summaries[idx]
+        elif flight_check_url is not None:
+            try:
+                report = flight_check_url(stream_url, full=True)
+                summary = report.get("summary") or {}
+            except Exception:
+                summary = {}
+        video = summary.get("video") or {}
+        audio = summary.get("audio") or {}
+        streams_section[f"stream{idx}"] = {
+            "codec": video.get("codec"),
+            "profile": video.get("profile"),
+            "level": video.get("level"),
+            "pixFmt": video.get("pix_fmt"),
+            "width": video.get("width"),
+            "height": video.get("height"),
+            "fps": (video.get("r_frame_rate") or {}).get("value"),
+            "avgFps": (video.get("avg_frame_rate") or {}).get("value"),
+            "bitrate": video.get("bitrate"),
+            "container": summary.get("container"),
+            "go2rtcChannel": stream_name,
+            "streamUrl": stream_url,
+            "audioCodec": audio.get("codec"),
+            "audioSampleRate": audio.get("sample_rate"),
+            "audioChannels": audio.get("channels"),
+        }
+        mapped.append(channel_label)
+
+    settings_payload = CameraSettings.build_settings(
+        market_name=model,
+        mac=mac_value,
+        host=payload.get("host") or "",
+        firmware_version=payload.get("firmwareVersion") or "",
+        streams=streams_section,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+    return {
+        "message": "settings generated",
+        "path": str(out_path),
+        "filename": filename,
+        "mac": mac_value,
+        "streams": mapped,
+    }
+
+
+@app.delete("/api/unifi/settings/delete")
+def unifi_delete_settings(payload: dict = Body(...)):
+    filename = (payload.get("filename") or "").strip()
+    if not filename or not filename.endswith("_Settings.json"):
+        raise HTTPException(status_code=400, detail="invalid filename")
+    base_dir = (Path(__file__).resolve().parent.parent / "Unifi" / "camera_data").resolve()
+    target = (base_dir / filename).resolve()
+    if base_dir not in target.parents:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+    target.unlink()
+    return {"message": "deleted", "filename": filename}
+
+
+@app.post("/api/unifi/runtime/start")
+def unifi_runtime_start():
+    runtime = _get_unifi_runtime()
+    runtime.start_all()
+    return unifi_status()
+
+
+@app.post("/api/unifi/runtime/stop")
+def unifi_runtime_stop():
+    runtime = _get_unifi_runtime()
+    runtime.stop_all()
+    return unifi_status()
+
+
+@app.post("/api/unifi/discovery/start")
+def unifi_discovery_start():
+    runtime = _get_unifi_runtime()
+    if process_state_store.get("discovery.running", False):
+        raise HTTPException(status_code=409, detail="Discovery already running")
+    runtime.discovery_service.start()
+    process_state_store.update(
+        {
+            "discovery.running": True,
+            "discovery.started_at": datetime.utcnow().isoformat() + "Z",
+            "discovery.last_error": "",
+        }
+    )
+    return unifi_status()
+
+
+@app.post("/api/unifi/discovery/stop")
+def unifi_discovery_stop():
+    runtime = _get_unifi_runtime()
+    runtime.discovery_service.stop()
+    process_state_store.update(
+        {
+            "discovery.running": False,
+            "discovery.camera": "",
+        }
+    )
+    return unifi_status()
+
+
+@app.post("/api/unifi/wss/start")
+def unifi_wss_start():
+    runtime = _get_unifi_runtime()
+    runtime.wss_service.start()
+    return unifi_status()
+
+
+@app.post("/api/unifi/wss/stop")
+def unifi_wss_stop():
+    runtime = _get_unifi_runtime()
+    runtime.wss_service.stop()
+    return unifi_status()
 
 
 @app.get("/api/settings")

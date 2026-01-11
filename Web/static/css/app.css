@@ -20,5 +20,35 @@ textarea { font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
 }
 .cam-drag-handle:active { cursor: grabbing; }
 .cam-drag-icon { display: block; fill: currentColor; }
+.cam-generate-progress { position: relative; }
+.cam-generate-progress .progress-bar { min-width: 8rem; }
+.cam-progress-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 500;
+  pointer-events: none;
+}
+.cam-model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  max-height: 220px;
+  overflow: auto;
+  display: none;
+}
+.cam-model-dropdown.show { display: block; }
+.cam-model-option {
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.cam-model-option:hover,
+.cam-model-option.active { background: #e9ecef; }
 .sortable-ghost { opacity: 0.5; }
 .sortable-chosen { cursor: grabbing; }

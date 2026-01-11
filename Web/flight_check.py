@@ -8,6 +8,12 @@ Usage (ffprobe -> checker):
   To check go2rtc output
   ffprobe -v error -show_streams -show_format -print_format json "http://<host>:1984/api/stream.flv?src=<name>" | python -m Web.flight_check -
 
+Usage (ONVIF apply + re-check):
+  python -m Web.onvif_probe --host <ip> --port 2020 --user <user> --password <pass> --encoder-config-token main
+  python -m Web.onvif_probe --host <ip> --port 2020 --user <user> --password <pass> \
+    --set-encoder-config-json '{"token":"main","name":"VideoEncoder_1","encoding":"H264","width":1920,"height":1080,"quality":3,"framerate_limit":15,"bitrate":2500,"gov_length":25,"profile":"Main"}'
+  ffprobe -v error -show_streams -show_format -print_format json "rtsp://<user>:<pass>@<ip>:554/stream1"
+
 This class is the single source of truth for thresholds and preferred formats
 when validating streams against the Protect/go2rtc expectations.
 
@@ -27,6 +33,7 @@ from typing import Dict, Any, Tuple
 from urllib.parse import quote, urlparse
 from urllib.request import urlopen
 import socket
+import random
 
 from Web.onvif_client import OnvifSoapClient
 from urllib.error import HTTPError
@@ -367,7 +374,12 @@ def main():
     sys.exit(0 if results.get("All checks passed") else 2)
 
 
-def check_url(url: str, ffprobe_path: str = "ffprobe") -> Dict[str, Any]:
+def check_url(
+    url: str,
+    ffprobe_path: str = "ffprobe",
+    full: bool = False,
+    mac_mode: str = "lookup",
+) -> Dict[str, Any]:
     """
     Convenience helper: run ffprobe against a URL and return the flight check report.
     """
@@ -392,7 +404,87 @@ def check_url(url: str, ffprobe_path: str = "ffprobe") -> Dict[str, Any]:
     fc = FinalFlightCheck()
     results = fc.check_flight(probe)
     results["All checks passed"] = results.pop("ok")
+    if full:
+        results["probe"] = probe
+        results["summary"] = summarize_probe(probe)
+        results["mac"] = _resolve_mac_report(url, mac_mode)
     return results
+
+
+def _resolve_mac_report(url: str, mac_mode: str) -> Dict[str, Any]:
+    mode = (mac_mode or "lookup").lower()
+    report: Dict[str, Any] = {"mode": mode, "value": None, "source": None, "detail": None}
+    if mode == "random":
+        mac = _generate_random_mac()
+        report.update({"value": mac, "source": "random"})
+        return report
+    info = _mac_from_url(url)
+    report["detail"] = info
+    if info.get("mac"):
+        report.update({"value": info.get("mac"), "source": "arp"})
+    else:
+        report.update({"value": None, "source": "arp"})
+    return report
+
+
+def _generate_random_mac() -> str:
+    # Locally administered, unicast MAC (set bit1, clear bit0)
+    first = random.randint(0x00, 0xFF)
+    first = (first & 0xFE) | 0x02
+    octets = [first] + [random.randint(0x00, 0xFF) for _ in range(5)]
+    return ":".join(f"{b:02x}" for b in octets)
+
+
+def resolve_mac(url: str, mac_mode: str = "lookup") -> Dict[str, Any]:
+    """
+    Public wrapper for MAC lookup/generation without running ffprobe.
+    """
+    return _resolve_mac_report(url, mac_mode)
+
+
+def summarize_probe(probe: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build a compact summary from an ffprobe JSON payload (no network calls).
+    """
+    summary: Dict[str, Any] = {
+        "container": None,
+        "bitrate": None,
+        "video": {},
+        "audio": {},
+    }
+    fmt_block = probe.get("format") or {}
+    fmt = fmt_block.get("format_name")
+    fmt_bitrate = fmt_block.get("bit_rate")
+    summary["container"] = fmt
+    summary["bitrate"] = int(fmt_bitrate) if fmt_bitrate else None
+
+    vids = FinalFlightCheck._get_streams_by_type(probe, "video")
+    if vids:
+        v = vids[0]
+        summary["video"] = {
+            "codec": v.get("codec_name"),
+            "profile": v.get("profile"),
+            "level": v.get("level"),
+            "pix_fmt": v.get("pix_fmt"),
+            "width": v.get("width"),
+            "height": v.get("height"),
+            "r_frame_rate": _parse_rate(v.get("r_frame_rate", "")),
+            "avg_frame_rate": _parse_rate(v.get("avg_frame_rate", "")),
+            "bits_per_raw_sample": v.get("bits_per_raw_sample"),
+            "has_b_frames": v.get("has_b_frames"),
+            "bitrate": int(v.get("bit_rate")) if v.get("bit_rate") else None,
+        }
+
+    auds = FinalFlightCheck._get_streams_by_type(probe, "audio")
+    if auds:
+        a = auds[0]
+        summary["audio"] = {
+            "codec": a.get("codec_name"),
+            "sample_rate": a.get("sample_rate"),
+            "channels": a.get("channels"),
+        }
+
+    return summary
 
 
 def _parse_rate(rate: str) -> Dict[str, Any]:
@@ -757,6 +849,187 @@ def summarize_onvif_profiles(
         device_path=device_path,
         https=https,
     )
+
+
+def apply_onvif_encoder_settings(
+    host: str,
+    username: str,
+    password: str,
+    config: Dict[str, Any],
+    port: int | None = None,
+    is_tapo: bool = False,
+    device_path: str = "/onvif/device_service",
+    https: bool = False,
+    auth_mode: str = "digest",
+    wsse_mode: str = "digest",
+) -> Dict[str, Any]:
+    """
+    Apply ONVIF video encoder settings via SetVideoEncoderConfiguration.
+    """
+    if port is None:
+        port = 2020 if is_tapo else 80
+    client = OnvifSoapClient(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        auth_mode=auth_mode,
+        wsse_mode=wsse_mode,
+        https=https,
+    )
+    device_url = client.endpoint(device_path)
+    media_url = client.get_media_xaddr(device_url) or device_url
+    result = client.set_video_encoder_configuration(media_url, config, force_persistence=True)
+    return {
+        "ok": bool(result.get("ok")),
+        "device_url": device_url,
+        "media_url": media_url,
+        "result": result,
+    }
+
+
+def apply_onvif_encoder_for_profile(
+    host: str,
+    username: str,
+    password: str,
+    width: int,
+    height: int,
+    *,
+    port: int | None = None,
+    is_tapo: bool = False,
+    device_path: str = "/onvif/device_service",
+    https: bool = False,
+    auth_mode: str = "digest",
+    wsse_mode: str = "digest",
+    profile: str = "Main",
+    quality: int | None = None,
+    framerate_limit: int | None = None,
+    bitrate: int | None = None,
+    gov_length: int | None = None,
+) -> Dict[str, Any]:
+    """
+    Find ONVIF profile by resolution and apply encoder settings.
+    """
+    if port is None:
+        port = 2020 if is_tapo else 80
+    client = OnvifSoapClient(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        auth_mode=auth_mode,
+        wsse_mode=wsse_mode,
+        https=https,
+    )
+    device_url = client.endpoint(device_path)
+    media_url = client.get_media_xaddr(device_url) or device_url
+    profiles = client.get_profiles(media_url, include_streams=False)
+    target = next(
+        (p for p in profiles if p.get("video_width") == width and p.get("video_height") == height),
+        None,
+    )
+    if target is None and profiles:
+        target = profiles[0]
+    if not target:
+        return {"ok": False, "error": "no profiles found", "device_url": device_url, "media_url": media_url}
+    token = target.get("video_encoder_token")
+    if not token:
+        return {"ok": False, "error": "missing video encoder token", "device_url": device_url, "media_url": media_url}
+    current = client.get_video_encoder_configuration(media_url, token)
+    config = {
+        "token": current.get("token") or token,
+        "name": current.get("name") or "",
+        "encoding": current.get("encoding") or "H264",
+        "width": width,
+        "height": height,
+        "quality": quality if quality is not None else current.get("quality"),
+        "framerate_limit": framerate_limit if framerate_limit is not None else current.get("framerate_limit"),
+        "bitrate": bitrate if bitrate is not None else current.get("bitrate_limit"),
+        "gov_length": gov_length if gov_length is not None else current.get("gov_length"),
+        "profile": profile,
+    }
+    result = client.set_video_encoder_configuration(media_url, config, force_persistence=True)
+    return {
+        "ok": bool(result.get("ok")),
+        "device_url": device_url,
+        "media_url": media_url,
+        "profile_used": target.get("token"),
+        "encoder_token": token,
+        "applied": config,
+        "result": result,
+    }
+
+
+def apply_onvif_encoder_max_resolution(
+    host: str,
+    username: str,
+    password: str,
+    *,
+    port: int | None = None,
+    is_tapo: bool = False,
+    device_path: str = "/onvif/device_service",
+    https: bool = False,
+    auth_mode: str = "digest",
+    wsse_mode: str = "digest",
+    profile: str = "Main",
+    quality: int | None = None,
+    framerate_limit: int | None = None,
+    bitrate: int | None = None,
+    gov_length: int | None = None,
+) -> Dict[str, Any]:
+    """
+    Pick the highest-resolution ONVIF profile and apply encoder settings.
+    """
+    if port is None:
+        port = 2020 if is_tapo else 80
+    client = OnvifSoapClient(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        auth_mode=auth_mode,
+        wsse_mode=wsse_mode,
+        https=https,
+    )
+    device_url = client.endpoint(device_path)
+    media_url = client.get_media_xaddr(device_url) or device_url
+    profiles = client.get_profiles(media_url, include_streams=False)
+    if not profiles:
+        return {"ok": False, "error": "no profiles found", "device_url": device_url, "media_url": media_url}
+    def _res_score(p: Dict[str, Any]) -> int:
+        try:
+            return int(p.get("video_width") or 0) * int(p.get("video_height") or 0)
+        except Exception:
+            return 0
+    target = max(profiles, key=_res_score)
+    token = target.get("video_encoder_token")
+    if not token:
+        return {"ok": False, "error": "missing video encoder token", "device_url": device_url, "media_url": media_url}
+    current = client.get_video_encoder_configuration(media_url, token)
+    width = target.get("video_width") or current.get("width")
+    height = target.get("video_height") or current.get("height")
+    config = {
+        "token": current.get("token") or token,
+        "name": current.get("name") or "",
+        "encoding": current.get("encoding") or "H264",
+        "width": width,
+        "height": height,
+        "quality": quality if quality is not None else current.get("quality"),
+        "framerate_limit": framerate_limit if framerate_limit is not None else current.get("framerate_limit"),
+        "bitrate": bitrate if bitrate is not None else current.get("bitrate_limit"),
+        "gov_length": gov_length if gov_length is not None else current.get("gov_length"),
+        "profile": profile,
+    }
+    result = client.set_video_encoder_configuration(media_url, config, force_persistence=True)
+    return {
+        "ok": bool(result.get("ok")),
+        "device_url": device_url,
+        "media_url": media_url,
+        "profile_used": target.get("token"),
+        "encoder_token": token,
+        "applied": config,
+        "result": result,
+    }
 
 
 def test_flv_stream(url: str) -> Dict[str, Any]:

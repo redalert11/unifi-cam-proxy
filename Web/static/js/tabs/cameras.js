@@ -22,6 +22,8 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
   const camOnvifProfiles = root.querySelector("#camOnvifProfiles");
   const camTapoHost = root.querySelector("#camTapoHost");
   const camTapoCloudPass = root.querySelector("#camTapoCloudPass");
+  const camTapoAccountPass = root.querySelector("#camTapoAccountPass");
+  const camTapoAccountUser = root.querySelector("#camTapoAccountUser");
   const camTapoAuthCloud = root.querySelector("#camTapoAuthCloud");
   const camTapoAuthHash = root.querySelector("#camTapoAuthHash");
   const camTapoHash = root.querySelector("#camTapoHash");
@@ -37,10 +39,26 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
   const camProbeMsg = root.querySelector("#camProbeMsg");
   const camCompatibility = root.querySelector("#camCompatibility");
   const camStep2Status = root.querySelector("#camStep2Status");
+  const camStep3Status = root.querySelector("#camStep3Status");
+  const camForceTranscodeBtn = root.querySelector("#camForceTranscodeBtn");
+  const camOnvifUpdateBtn = root.querySelector("#camOnvifUpdateBtn");
   const camProbePreviewSelect = root.querySelector("#camProbePreviewSelect");
   const camProbePreviewCard = root.querySelector("#camProbePreviewCard");
   const camProbeOutput = root.querySelector("#camProbeOutput");
   const camProbeResult = root.querySelector("#camProbeResult");
+  const camProbeFullToggle = root.querySelector("#camProbeFullToggle");
+  const camModelInput = root.querySelector("#camModelInput");
+  const camModelValue = root.querySelector("#camModelValue");
+  const camModelDropdown = root.querySelector("#camModelDropdown");
+  const camStepHint = root.querySelector("#camStepHint");
+  const camStream1Select = root.querySelector("#camStream1Select");
+  const camStream2Select = root.querySelector("#camStream2Select");
+  const camStream3Select = root.querySelector("#camStream3Select");
+  const camGenerateSettingsBtn = root.querySelector("#camGenerateSettingsBtn");
+  const camGenerateMacToggle = root.querySelector("#camGenerateMacToggle");
+  const camGenerateProgress = root.querySelector("#camGenerateProgress");
+  const camGenerateProgressLabel = root.querySelector("#camGenerateProgressLabel");
+  const camDeleteSettingsBtn = root.querySelector("#camDeleteSettingsBtn");
 
   let webSettings = {};
   let streamsMap = {};
@@ -48,6 +66,16 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
   let onvifGroupSources = [];
   let onvifGroupName = "";
   let initialized = false;
+  let cameraModelMap = new Map();
+  let cameraModelOptions = [];
+  let resolvedSettingsFile = null;
+  let lastProbeData = null;
+  let lastProbeSelection = null;
+  const stepHints = {
+    camStep1Pane: "Add camera streams or load profiles to continue.",
+    camStep2Pane: "Select a stream, then run the probe.",
+    camStep3Pane: "G4 Dome camera loaded by default. Select a different model or map camera streams.",
+  };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -67,6 +95,27 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
       el.textContent = label;
       el.className = `text-muted small badge text-bg-${kind}`;
     }
+  }
+
+  function setStepHint(text) {
+    if (!camStepHint) return;
+    if (!text) {
+      camStepHint.classList.add("d-none");
+      camStepHint.textContent = "";
+      return;
+    }
+    camStepHint.textContent = text;
+    camStepHint.className = "border rounded p-2 bg-body-tertiary small mb-3";
+  }
+
+  function setForceTranscodeEnabled(enabled) {
+    if (!camForceTranscodeBtn) return;
+    camForceTranscodeBtn.disabled = !enabled;
+  }
+
+  function setOnvifUpdateEnabled(enabled) {
+    if (!camOnvifUpdateBtn) return;
+    camOnvifUpdateBtn.disabled = !enabled;
   }
 
   function describeCompatibility(info, srcHint = "") {
@@ -261,6 +310,41 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
     return { ok, message, kind, streamLabel, checklist };
   }
 
+  function renderFlightCheckList(data, level = 0) {
+    if (data == null) return "";
+    if (typeof data !== "object") {
+      return `<span>${String(data)}</span>`;
+    }
+    if (Array.isArray(data)) {
+      if (!data.length) return "<span>[]</span>";
+      return `<ul class="mb-0 ps-${Math.min(4, level + 2)}">${data
+        .map((item) => `<li>${renderFlightCheckList(item, level + 1)}</li>`)
+        .join("")}</ul>`;
+    }
+    const entries = Object.entries(data);
+    if (!entries.length) return "<span>{}</span>";
+    return `<ul class="mb-0 ps-${Math.min(4, level + 2)}">${entries
+      .map(([key, value]) => {
+        const rendered = renderFlightCheckList(value, level + 1);
+        return `<li><span class="fw-semibold">${key}:</span> ${rendered}</li>`;
+      })
+      .join("")}</ul>`;
+  }
+
+  function formatCameraModel(model) {
+    if (!model) return "";
+    const trimmed = model.replace(/^UVC_/, "");
+    return trimmed
+      .split("_")
+      .filter(Boolean)
+      .map((part) => {
+        if (/^G\d+$/i.test(part)) return part.toUpperCase();
+        if (part.toUpperCase() === part && part.length <= 4) return part;
+        return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+      })
+      .join(" ");
+  }
+
   function parseStreamSelection(value) {
     if (!value) return { name: "", channel: null };
     const marker = "::";
@@ -304,28 +388,50 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
     if (!camProbePreviewSelect) return;
     const current = selectedValue || camProbePreviewSelect.value || "";
     camProbePreviewSelect.innerHTML = '<option value="">Select a stream…</option>';
+    const options = [];
     Object.keys(streamsMap || {}).forEach((name) => {
       const info = streamsMap[name] || {};
       const producers = Array.isArray(info.producers) ? info.producers : [];
       const friendly = (webSettings[name] && webSettings[name].friendly) || name;
       if (producers.length > 1) {
         producers.forEach((_, idx) => {
-          const opt = document.createElement("option");
-          opt.value = `${name}::${idx}`;
-          opt.textContent = `${friendly} (channel ${idx})`;
-          camProbePreviewSelect.appendChild(opt);
+          options.push({
+            value: `${name}::${idx}`,
+            label: `${friendly} (channel ${idx})`,
+          });
         });
       } else {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = friendly;
-        camProbePreviewSelect.appendChild(opt);
+        options.push({ value: name, label: friendly });
       }
+    });
+    options.forEach((optItem) => {
+      const opt = document.createElement("option");
+      opt.value = optItem.value;
+      opt.textContent = optItem.label;
+      camProbePreviewSelect.appendChild(opt);
     });
     if (current) {
       camProbePreviewSelect.value = current;
     }
+    if (camStream1Select) populateStreamSelect(camStream1Select);
+    if (camStream2Select) populateStreamSelect(camStream2Select);
+    if (camStream3Select) populateStreamSelect(camStream3Select);
     renderPreviewCard(camProbePreviewSelect.value);
+  }
+
+  function populateStreamSelect(selectEl) {
+    const current = selectEl.value || "";
+    selectEl.innerHTML = '<option value="">Select a stream…</option>';
+    const options = Array.from(camProbePreviewSelect?.querySelectorAll("option") || []).filter(
+      (opt) => opt.value
+    );
+    options.forEach((opt) => {
+      const clone = document.createElement("option");
+      clone.value = opt.value;
+      clone.textContent = opt.textContent;
+      selectEl.appendChild(clone);
+    });
+    if (current) selectEl.value = current;
   }
 
   async function probeRow(row) {
@@ -434,19 +540,34 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
     camProbeMsg.textContent = "Probing stream…";
     camProbeMsg.className = "text-muted small";
     camCompatibility.innerHTML = "";
-    if (camProbeOutput) camProbeOutput.innerHTML = "";
+    setForceTranscodeEnabled(false);
+    setOnvifUpdateEnabled(false);
+    lastProbeData = null;
+    lastProbeSelection = null;
+    if (camProbeOutput) camProbeOutput.value = "";
     if (camProbeResult) camProbeResult.innerHTML = "";
     try {
       await probeAllStreams();
       if (camProbePreviewSelect?.value) {
         const { name, channel } = parseStreamSelection(camProbePreviewSelect.value);
-        const query = channel == null ? "" : `?channel=${encodeURIComponent(channel)}`;
-        const data = await api(`/api/flightcheck/${encodeURIComponent(name)}${query}`);
+        const params = new URLSearchParams();
+        if (channel != null) {
+          params.set("channel", String(channel));
+        }
+        if (camProbeFullToggle?.checked) {
+          params.set("full", "true");
+        }
+        const query = params.toString();
+        const data = await api(`/api/flightcheck/${encodeURIComponent(name)}${query ? `?${query}` : ""}`);
+        lastProbeData = data;
+        lastProbeSelection = { name, channel };
         if (camProbeOutput) {
-          camProbeOutput.innerHTML = renderFlightCheckList(data);
+          camProbeOutput.value = JSON.stringify(data, null, 2);
         }
         if (camProbeResult) {
           const passed = data && (data["All checks passed"] === true || data.ok === true);
+          setForceTranscodeEnabled(!passed);
+          setOnvifUpdateEnabled(true);
           if (passed) {
             camProbeResult.innerHTML =
               '<svg width="20" height="20" viewBox="0 0 20 20" aria-label="Passed" role="img" class="text-success"><circle cx="10" cy="10" r="9" fill="currentColor"></circle><path d="M6 10.5l2.2 2.3L14 7.8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-success small fw-semibold">Passed</span>';
@@ -455,6 +576,15 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
               '<svg width="20" height="20" viewBox="0 0 20 20" aria-label="Failed" role="img" class="text-danger"><circle cx="10" cy="10" r="9" fill="currentColor"></circle><path d="M6.5 6.5l7 7M13.5 6.5l-7 7" stroke="#fff" stroke-width="2" stroke-linecap="round"></path></svg><span class="text-danger small fw-semibold">Failed</span>';
           }
           setStepStatus(camStep2Status, passed ? "passed" : "failed", passed ? "success" : "danger");
+          if (camStepHint) {
+            stepHints.camStep2Pane = passed
+              ? "Flight check passed. Continue to Step 3 or test another stream."
+              : "Flight check failed: update camera settings and try again.";
+            const activePane = root.querySelector(".tab-pane.active");
+            if (activePane?.id === "camStep2Pane") {
+              setStepHint(stepHints.camStep2Pane);
+            }
+          }
         }
       }
       camProbeMsg.textContent = "";
@@ -464,7 +594,9 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
       camProbeMsg.textContent = err.message || "Probe failed.";
       camProbeMsg.className = "text-danger small";
       setStepStatus(camStep2Status, "failed", "danger");
-      if (camProbeOutput) camProbeOutput.textContent = err.message || "Probe failed.";
+      setForceTranscodeEnabled(false);
+      setOnvifUpdateEnabled(false);
+      if (camProbeOutput) camProbeOutput.value = err.message || "Probe failed.";
       if (camProbeResult) camProbeResult.innerHTML = "";
     } finally {
       camProbeBtn.disabled = false;
@@ -473,6 +605,412 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
 
   camProbePreviewSelect?.addEventListener("change", (event) => {
     renderPreviewCard(event.target.value);
+    setForceTranscodeEnabled(false);
+    setOnvifUpdateEnabled(false);
+    lastProbeData = null;
+    lastProbeSelection = null;
+  });
+
+  function parseRtspCredentials(url) {
+    if (!url) return null;
+    try {
+      const parsed = new URL(url);
+      if (!parsed.username || !parsed.password || !parsed.hostname) return null;
+      return { host: parsed.hostname, username: parsed.username, password: parsed.password };
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchGo2rtcConfig() {
+    try {
+      const res = await api("/api/go2rtc/config");
+      return res?.content || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function normalizeStreamName(value) {
+    if (!value) return "";
+    const marker = "::";
+    const idx = value.lastIndexOf(marker);
+    return idx === -1 ? value : value.slice(0, idx);
+  }
+
+  function parseConfigForStream(content, streamName) {
+    if (!content || !streamName) return null;
+    const normalized = normalizeStreamName(streamName);
+    const lines = content.split("\n");
+    let currentComment = "";
+    let fallback = null;
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (trimmed.startsWith("#")) {
+        currentComment = trimmed.replace(/^#\s?/, "");
+        continue;
+      }
+      if (!trimmed || !trimmed.includes(":")) continue;
+      const sep = trimmed.indexOf(":");
+      const key = trimmed.slice(0, sep).trim();
+      const rest = trimmed.slice(sep + 1);
+      if (key !== normalized) {
+        if (!fallback && normalized && key.endsWith(`_${normalized}`)) {
+          const src = rest.trim().replace(/^["']|["']$/g, "");
+          fallback = { comment: currentComment, src };
+        }
+        continue;
+      }
+      const src = rest.trim().replace(/^["']|["']$/g, "");
+      return { comment: currentComment, src };
+    }
+    return fallback;
+  }
+
+  function parseCameraAccountFromComment(comment) {
+    if (!comment) return null;
+    const userMatch = comment.match(/camera_account_username=([^\s|]+)/i);
+    const passMatch = comment.match(/camera_account_password=([^\s|]+)/i);
+    if (!userMatch || !passMatch) return null;
+    return { username: userMatch[1], password: passMatch[1] };
+  }
+
+  function parseTapoHost(src) {
+    if (!src || !src.startsWith("tapo://")) return null;
+    try {
+      const parsed = new URL(src);
+      return parsed.hostname || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function resolveOnvifTarget() {
+    const selection = lastProbeSelection?.name;
+    if (!selection) return null;
+    const content = await fetchGo2rtcConfig();
+    const entry = parseConfigForStream(content, selection);
+    if (entry?.src?.startsWith("tapo://")) {
+      const host = parseTapoHost(entry.src);
+      const creds = parseCameraAccountFromComment(entry.comment);
+      if (host && creds) {
+        return { host, username: creds.username, password: creds.password, port: 2020, isTapo: true };
+      }
+      return null;
+    }
+    if (entry?.src) {
+      const rtspCreds = parseRtspCredentials(entry.src);
+      if (rtspCreds) {
+        return { host: rtspCreds.host, username: rtspCreds.username, password: rtspCreds.password, port: 80, isTapo: false };
+      }
+    }
+    return null;
+  }
+
+  camOnvifUpdateBtn?.addEventListener("click", async () => {
+    if (!lastProbeSelection || !lastProbeData) {
+      toast("Run a probe first.", "error");
+      return;
+    }
+    const target = await resolveOnvifTarget();
+    if (!target) {
+      const selection = lastProbeSelection?.name || "(none)";
+      const content = await fetchGo2rtcConfig();
+      const entry = parseConfigForStream(content, selection);
+      const debug = entry ? `found=${selection} src=${entry.src || ""}` : `missing=${selection}`;
+      toast(`Missing ONVIF credentials in go2rtc config (${debug})`, "error");
+      return;
+    }
+    const ok = window.confirm("Apply ONVIF encoder settings for this stream?");
+    if (!ok) return;
+    camOnvifUpdateBtn.disabled = true;
+    camOnvifUpdateBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+    try {
+      await api("/api/onvif/encoder/apply-max", {
+        method: "POST",
+        body: JSON.stringify({
+          host: target.host,
+          port: target.port,
+          username: target.username,
+          password: target.password,
+          is_tapo: target.isTapo,
+          profile: "Main",
+        }),
+      });
+      toast("ONVIF settings applied (max resolution). Re-run the probe.");
+    } catch (err) {
+      toast(err.message || "ONVIF update failed.", "error");
+    } finally {
+      camOnvifUpdateBtn.disabled = false;
+      camOnvifUpdateBtn.innerHTML = '<i class="bi bi-sliders me-1"></i>Update camera settings via ONVIF';
+    }
+  });
+
+  camForceTranscodeBtn?.addEventListener("click", async () => {
+    if (!lastProbeSelection) {
+      toast("Select a stream and run a probe first.", "error");
+      return;
+    }
+    const label = camProbePreviewSelect?.selectedOptions?.[0]?.textContent || lastProbeSelection.name;
+    const ok = window.confirm(`Force transcode for ${label}? This will update go2rtc and reload it.`);
+    if (!ok) return;
+    camForceTranscodeBtn.disabled = true;
+    camForceTranscodeBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+    try {
+      const summary = lastProbeData?.summary || {};
+      const payload = {
+        name: lastProbeSelection.name,
+        channel: lastProbeSelection.channel,
+        summary,
+      };
+      const res = await api("/api/go2rtc/streams/force-transcode", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      toast(`Transcode enabled for ${res.name}. go2rtc reloaded.`);
+      setForceTranscodeEnabled(false);
+    } catch (err) {
+      toast(err.message || "Force transcode failed.", "error");
+      setForceTranscodeEnabled(true);
+    } finally {
+      camForceTranscodeBtn.disabled = false;
+      camForceTranscodeBtn.innerHTML = '<i class="bi bi-lightning-charge me-1"></i>Force transcode';
+    }
+  });
+
+  function openModelDropdown() {
+    if (!camModelDropdown) return;
+    camModelDropdown.classList.add("show");
+  }
+
+  function closeModelDropdown() {
+    if (!camModelDropdown) return;
+    camModelDropdown.classList.remove("show");
+  }
+
+  camModelInput?.addEventListener("click", (event) => {
+    if (camModelValue && camModelValue.value) {
+      camModelInput.dataset.prevValue = camModelInput.value;
+      camModelInput.placeholder = formatCameraModel(camModelValue.value);
+    } else {
+      camModelInput.dataset.prevValue = camModelInput.value;
+    }
+    camModelInput.value = "";
+    renderModelDropdown("");
+    openModelDropdown();
+  });
+
+  camStream1Select?.addEventListener("change", updateStep3Hint);
+  camStream2Select?.addEventListener("change", updateStep3Hint);
+  camStream3Select?.addEventListener("change", updateStep3Hint);
+
+  camGenerateSettingsBtn?.addEventListener("click", async () => {
+    const model = camModelValue?.value || "";
+    const stream1 = camStream1Select?.value || "";
+    const stream2 = camStream2Select?.value || "";
+    const stream3 = camStream3Select?.value || "";
+    if (!model) {
+      setStepHint("Select a camera model first.");
+      return;
+    }
+    if (!stream1 || !stream2 || !stream3) {
+      setStepHint("Select Stream 1, Stream 2, and Stream 3 first.");
+      return;
+    }
+    const updateProgress = (pct, label, kind = "info") => {
+      if (!camGenerateProgress) return;
+      camGenerateProgress.style.width = `${pct}%`;
+      const textTone = kind === "success" || kind === "danger" ? "text-white" : "text-dark";
+      camGenerateProgress.className = `progress-bar bg-${kind} ${textTone}`;
+      if (camGenerateProgressLabel) {
+        camGenerateProgress.textContent = "";
+        camGenerateProgressLabel.textContent = label;
+        camGenerateProgressLabel.className = `cam-progress-label ${textTone}`;
+      } else {
+        camGenerateProgress.textContent = label;
+      }
+    };
+    const setDeleteButtonVisible = (visible) => {
+      if (!camDeleteSettingsBtn) return;
+      camDeleteSettingsBtn.classList.toggle("d-none", !visible);
+    };
+    setDeleteButtonVisible(false);
+    updateProgress(5, "Preparing…", "secondary");
+    if (camGenerateSettingsBtn) {
+      camGenerateSettingsBtn.disabled = true;
+      camGenerateSettingsBtn.textContent = "Generating…";
+    }
+    const getSelectLabel = (selectEl, value) => {
+      if (!selectEl) return value;
+      const option = Array.from(selectEl.options || []).find((opt) => opt.value === value);
+      return option?.textContent || value;
+    };
+    try {
+      const macMode = camGenerateMacToggle?.checked ? "random" : "lookup";
+      const selections = [
+        { value: stream1, select: camStream1Select },
+        { value: stream2, select: camStream2Select },
+        { value: stream3, select: camStream3Select },
+      ].map(({ value, select }) => {
+        const parsed = parseStreamSelection(value);
+        return { ...parsed, value, label: getSelectLabel(select, value) };
+      });
+      const stream1Selection = selections[0] || { name: "", channel: null };
+      updateProgress(10, macMode === "random" ? "Generating MAC…" : "Retrieving MAC…", "info");
+      const macRes = await api("/api/unifi/settings/resolve-mac", {
+        method: "POST",
+        body: JSON.stringify({
+          stream: { name: stream1Selection.name, channel: stream1Selection.channel },
+          macMode,
+        }),
+      });
+      resolvedSettingsFile = macRes.filename || null;
+      updateProgress(20, "Checking for existing file…", "info");
+      if (macRes.exists) {
+        setDeleteButtonVisible(true);
+        throw new Error("File already exists");
+      }
+      const resolvedMac = macRes.mac;
+      const summaries = [];
+      const reportCache = new Map();
+      const streams = selections.map((item) => ({ name: item.name, channel: item.channel }));
+      for (let i = 0; i < selections.length; i += 1) {
+        const selection = selections[i];
+        const { name, channel } = selection;
+        const params = new URLSearchParams();
+        if (channel != null) params.set("channel", String(channel));
+        params.set("full", "true");
+        const label = selection.label || name || `Stream ${i + 1}`;
+        const cacheKey = `${name}::${channel ?? ""}`;
+        if (reportCache.has(cacheKey)) {
+          updateProgress(30 + i * 20, `Reusing results from ${label}…`, "info");
+          const cached = reportCache.get(cacheKey);
+          if (cached && cached["All checks passed"] === false) {
+            throw new Error(`${label} failed flight check. Run Step 2 and try again.`);
+          }
+          summaries.push((cached && cached.summary) || {});
+          updateProgress(40 + i * 20, `Retrieved settings from ${label}`, "info");
+          continue;
+        }
+        updateProgress(30 + i * 20, `Retrieving settings from ${label}…`, "info");
+        const report = await api(`/api/flightcheck/${encodeURIComponent(name)}?${params.toString()}`);
+        reportCache.set(cacheKey, report);
+        if (report && report["All checks passed"] === false) {
+          throw new Error(`${label} failed flight check. Run Step 2 and try again.`);
+        }
+        summaries.push(report.summary || {});
+        updateProgress(40 + i * 20, `Retrieved settings from ${label}`, "info");
+      }
+      const payload = {
+        model,
+        mac: resolvedMac,
+        macMode,
+        streams,
+        streamSummaries: summaries,
+      };
+      const res = await api("/api/unifi/settings/generate", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      updateProgress(90, `Creating file ${res.filename}…`, "info");
+      updateProgress(100, `Saved ${res.filename}`, "success");
+      setStepHint(`Settings generated: ${res.filename}`);
+      setStepStatus(camStep3Status, "Complete", "success");
+      if (camStep3Status) {
+        camStep3Status.textContent = "Complete";
+        camStep3Status.className = "ms-2 text-muted small badge text-bg-success";
+      }
+    } catch (err) {
+      updateProgress(100, err.message || "Failed to generate settings.", "danger");
+      setStepHint(err.message || "Failed to generate settings.");
+      if (String(err.message || "").includes("File already exists")) {
+        setDeleteButtonVisible(true);
+      }
+    } finally {
+      if (camGenerateSettingsBtn) {
+        camGenerateSettingsBtn.disabled = false;
+        camGenerateSettingsBtn.innerHTML = '<i class="bi bi-gear me-1"></i>Generate stream settings';
+      }
+    }
+  });
+
+  camDeleteSettingsBtn?.addEventListener("click", async () => {
+    if (!resolvedSettingsFile) {
+      toast("No existing settings file to delete.", "error");
+      return;
+    }
+    const ok = window.confirm(`Delete ${resolvedSettingsFile}? This cannot be undone.`);
+    if (!ok) return;
+    camDeleteSettingsBtn.disabled = true;
+    camDeleteSettingsBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+    try {
+      await api("/api/unifi/settings/delete", {
+        method: "DELETE",
+        body: JSON.stringify({ filename: resolvedSettingsFile }),
+      });
+      toast(`Deleted ${resolvedSettingsFile}`);
+      resolvedSettingsFile = null;
+      camDeleteSettingsBtn.classList.add("d-none");
+    } catch (err) {
+      toast(err.message || "Delete failed", "error");
+    } finally {
+      camDeleteSettingsBtn.disabled = false;
+      camDeleteSettingsBtn.innerHTML = '<i class="bi bi-trash me-1"></i>Delete existing settings file';
+    }
+  });
+
+  camModelInput?.addEventListener("input", (event) => {
+    const value = String(event.target.value || "");
+    renderModelDropdown(value);
+    openModelDropdown();
+    const key = value.trim().toLowerCase();
+    if (camModelValue) {
+      camModelValue.value = cameraModelMap.get(key) || "";
+    }
+    updateStep3Hint();
+    if (camStepHint) {
+      stepHints.camStep3Pane = camModelValue?.value
+        ? "Model selected. Continue to Step 2."
+        : "G4 Dome camera loaded by default. Select a different model or map camera streams.";
+      const activePane = root.querySelector(".tab-pane.active");
+      if (activePane?.id === "camStep3Pane") {
+        setStepHint(stepHints.camStep3Pane);
+      }
+    }
+  });
+
+  camModelDropdown?.addEventListener("click", (event) => {
+    const target = event.target.closest(".cam-model-option");
+    if (!target || !target.dataset.value) return;
+    const display = target.textContent || "";
+    const value = target.dataset.value;
+    if (camModelInput) camModelInput.value = display;
+    if (camModelValue) camModelValue.value = value;
+    if (camModelInput) camModelInput.placeholder = display;
+    closeModelDropdown();
+    updateStep3Hint();
+  });
+
+  camModelInput?.addEventListener("blur", () => {
+    if (!camModelInput) return;
+    const raw = camModelInput.value.trim();
+    if (!raw && camModelValue && camModelValue.value) {
+      const display = formatCameraModel(camModelValue.value);
+      camModelInput.value = display;
+      camModelInput.placeholder = display;
+    }
+    if (!raw && camModelInput.dataset.prevValue && !camModelValue?.value) {
+      camModelInput.value = camModelInput.dataset.prevValue;
+    }
+    updateStep3Hint();
+  });
+
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!camModelDropdown || !camModelInput) return;
+    if (camModelDropdown.contains(target) || camModelInput.contains(target)) return;
+    closeModelDropdown();
   });
 
   camAddExtraBtn2?.addEventListener("click", () => {
@@ -603,14 +1141,18 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
           sources
             .map((s, idx) => {
               const url = s.url || "";
+              const streamUri = s.stream_uri || "";
+              const displayUrl = streamUri || url;
               const name = s.name || `profile ${idx + 1}`;
               const tokenMatch = url.match(/subtype=([^&]+)/i);
               const profileId = tokenMatch ? tokenMatch[1] : "";
               const profileBadge = profileId ? `<span class="badge text-bg-secondary ms-2">${profileId}</span>` : "";
               const srcBadge = `<span class="badge text-bg-info ms-2">src=${idx}</span>`;
+              const onvifNote = streamUri && url ? `<div class="text-body-secondary small">ONVIF: ${url}</div>` : "";
+              const selectedUrl = streamUri || url;
               return `<label class="small text-muted d-flex align-items-center gap-2 mb-1">
-                <input class="form-check-input m-0 onvif-profile-check" type="checkbox" data-idx="${idx}" data-url="${url}" checked>
-                <span><i class="bi bi-camera-video me-1"></i>${name} — <span class="text-body-secondary">${url}</span> ${srcBadge}${profileBadge}</span>
+                <input class="form-check-input m-0 onvif-profile-check" type="checkbox" data-idx="${idx}" data-url="${selectedUrl}" data-profile="${profileId}" data-label="${name}" checked>
+                <span><i class="bi bi-camera-video me-1"></i>${name} — <span class="text-body-secondary">${displayUrl}</span> ${srcBadge}${profileBadge}${onvifNote}</span>
               </label>`;
             })
             .join("");
@@ -646,18 +1188,33 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
       return;
     }
     const selected = Array.from(root.querySelectorAll(".onvif-profile-check:checked"))
-      .map((input) => input.dataset.url)
-      .filter(Boolean);
+      .map((input) => ({
+        idx: input.dataset.idx,
+        url: input.dataset.url,
+        profile: input.dataset.profile,
+        label: input.dataset.label,
+      }))
+      .filter((item) => item.url);
     if (!selected.length) {
       toast("Select at least one profile to save", "error");
       return;
     }
+    const normalizeSuffix = (value) =>
+      String(value || "")
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^a-zA-Z0-9_-]/g, "_");
+    const streams = selected.map((item) => {
+      const suffix = item.profile || `stream${item.idx}`;
+      const safeSuffix = normalizeSuffix(suffix);
+      return { name: `${name}_${safeSuffix}`, src: item.url };
+    });
     camPersistBtnOnvif.disabled = true;
     camPersistBtnOnvif.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
     try {
-      await api("/api/go2rtc/streams/persist", { method: "POST", body: JSON.stringify({ streams: [{ name, src: selected }] }) });
+      await api("/api/go2rtc/streams/persist", { method: "POST", body: JSON.stringify({ streams }) });
       await api("/api/go2rtc/reload", { method: "POST" });
-      toast("Saved grouped ONVIF stream and reloaded go2rtc");
+      toast(`Saved ${streams.length} ONVIF stream(s) and reloaded go2rtc`);
       setStepStatus(camStep1Status, "Complete", "success");
     } catch (err) {
       toast(err.message || "Save failed", "error");
@@ -728,6 +1285,8 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
     if (!camTapoAddBtn || !camTapoPersistBtn) return;
     const friendly = camFriendlyInput?.value?.trim() || "";
     const host = camTapoHost?.value?.trim() || "";
+    const accountPass = camTapoAccountPass?.value?.trim() || "";
+    const accountUser = camTapoAccountUser?.value?.trim() || "";
     const base = friendly || host || "";
     const name = base ? base.replace(/\s+/g, "_") : "tapo_camera";
     const btn = persist ? camTapoPersistBtn : camTapoAddBtn;
@@ -737,7 +1296,10 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
       const url = await buildTapoUrl();
       const note = `http://localhost:1984/webrtc.html?src=${encodeURIComponent(name)}&media=video+audio+microphone`;
       if (persist) {
-        await api("/api/go2rtc/streams/persist", { method: "POST", body: JSON.stringify({ streams: [{ name, src: url, comment: note }] }) });
+        let comment = note;
+        if (accountUser) comment += ` | camera_account_username=${accountUser}`;
+        if (accountPass) comment += ` | camera_account_password=${accountPass}`;
+        await api("/api/go2rtc/streams/persist", { method: "POST", body: JSON.stringify({ streams: [{ name, src: url, comment }] }) });
         await api("/api/go2rtc/reload", { method: "POST" });
         toast("Saved to config and reloaded go2rtc");
       } else {
@@ -926,6 +1488,69 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
     }
   }
 
+  async function loadCameraModels() {
+    if (!camModelDropdown) return;
+    try {
+      const data = await api("/api/unifi/camera-models");
+      const models = Array.isArray(data?.models) ? data.models : [];
+      cameraModelMap = new Map();
+      cameraModelOptions = models.map((model) => {
+        const display = formatCameraModel(model);
+        cameraModelMap.set(display.toLowerCase(), model);
+        return { display, value: model };
+      });
+      const defaultModel = "UVC_G4_DOME";
+      if (camModelInput) {
+        const defaultDisplay = formatCameraModel(defaultModel);
+        camModelInput.value = defaultDisplay;
+        camModelInput.placeholder = defaultDisplay;
+        if (camModelValue) camModelValue.value = defaultModel;
+        renderModelDropdown(defaultDisplay);
+      }
+    } catch (err) {
+      if (camStepHint) {
+        camStepHint.textContent = err.message || "Failed to load models.";
+        camStepHint.className = "border rounded p-2 bg-body-tertiary small text-danger mb-3";
+      }
+    }
+  }
+
+  function renderModelDropdown(filterText = "") {
+    if (!camModelDropdown) return;
+    const needle = filterText.trim().toLowerCase();
+    const filtered = cameraModelOptions.filter((opt) => opt.display.toLowerCase().includes(needle));
+    camModelDropdown.innerHTML = "";
+    if (!filtered.length) {
+      camModelDropdown.innerHTML = '<div class="cam-model-option text-muted">No matches</div>';
+      return;
+    }
+    filtered.slice(0, 50).forEach((opt) => {
+      const item = document.createElement("div");
+      item.className = "cam-model-option";
+      item.textContent = opt.display;
+      item.dataset.value = opt.value;
+      camModelDropdown.appendChild(item);
+    });
+  }
+
+  function updateStep3Hint() {
+    if (!camStepHint) return;
+    const modelSet = !!(camModelValue && camModelValue.value);
+    const streamsSet =
+      !!(camStream1Select && camStream1Select.value) &&
+      !!(camStream2Select && camStream2Select.value) &&
+      !!(camStream3Select && camStream3Select.value);
+    if (modelSet && streamsSet) {
+      stepHints.camStep3Pane = "Click Generate stream settings.";
+    } else {
+      stepHints.camStep3Pane = "G4 Dome camera loaded by default. Select a different model or map camera streams.";
+    }
+    const activePane = root.querySelector(".tab-pane.active");
+    if (activePane?.id === "camStep3Pane") {
+      setStepHint(stepHints.camStep3Pane);
+    }
+  }
+
   function syncFriendlyFromSettings(name) {
     if (webSettings[name] && webSettings[name].friendly && camFriendlyInput) {
       camFriendlyInput.value = webSettings[name].friendly;
@@ -950,36 +1575,43 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
     });
   }
 
-  function initCollapseIcons() {
-    const collapseIconMap = {
-      camStep1Body: root.querySelector("#camStep1Icon"),
-      camStep2Body: root.querySelector("#camStep2Icon"),
-    };
-    Object.keys(collapseIconMap).forEach((id) => {
-      const body = root.querySelector(`#${id}`);
-      const icon = collapseIconMap[id];
-      if (!body || !icon) return;
-      body.addEventListener("show.bs.collapse", () => {
-        icon.classList.remove("bi-arrows-expand");
-        icon.classList.add("bi-arrows-collapse");
-      });
-      body.addEventListener("hide.bs.collapse", () => {
-        icon.classList.remove("bi-arrows-collapse");
-        icon.classList.add("bi-arrows-expand");
-      });
-    });
-  }
-
   return {
     async start() {
       if (!initialized) {
-        initCollapseIcons();
         setCamMode("onvif");
         addStreamRow();
+        const firstStepTab = root.querySelector("#camStep1Tab");
+        const firstStepPane = root.querySelector("#camStep1Pane");
+        if (firstStepTab) {
+          root.querySelectorAll("#camSetupSteps .nav-link").forEach((el) => {
+            el.classList.toggle("active", el === firstStepTab);
+            el.setAttribute("aria-selected", el === firstStepTab ? "true" : "false");
+          });
+        }
+        if (firstStepPane) {
+          root.querySelectorAll("#camStep1Pane, #camStep2Pane, #camStep3Pane").forEach((pane) => {
+            pane.classList.toggle("show", pane === firstStepPane);
+            pane.classList.toggle("active", pane === firstStepPane);
+          });
+        }
+        if (window.bootstrap?.Tab && firstStepTab) {
+          const tab = window.bootstrap.Tab.getOrCreateInstance(firstStepTab);
+          tab.show();
+        }
+        root.querySelectorAll('#camSetupSteps [data-bs-toggle="tab"]').forEach((tab) => {
+          tab.addEventListener("shown.bs.tab", (event) => {
+            const targetId = event.target.getAttribute("data-bs-target")?.replace("#", "");
+            const hint = targetId ? stepHints[targetId] : "";
+            setStepHint(hint);
+          });
+        });
+        setStepHint(stepHints.camStep1Pane);
         initialized = true;
       }
       await loadWebSettings();
       await loadStreamsList();
+      await loadCameraModels();
+      updateStep3Hint();
       updateCameraSelection();
       updateExistingStreamState();
       await probeAllStreams();
@@ -989,23 +1621,3 @@ export function initCamerasTab(root, { api, toast, buildFrameUrl }) {
     stop() {},
   };
 }
-  function renderFlightCheckList(data, level = 0) {
-    if (data == null) return "";
-    if (typeof data !== "object") {
-      return `<span>${String(data)}</span>`;
-    }
-    if (Array.isArray(data)) {
-      if (!data.length) return "<span>[]</span>";
-      return `<ul class="mb-0 ps-${Math.min(4, level + 2)}">${data
-        .map((item) => `<li>${renderFlightCheckList(item, level + 1)}</li>`)
-        .join("")}</ul>`;
-    }
-    const entries = Object.entries(data);
-    if (!entries.length) return "<span>{}</span>";
-    return `<ul class="mb-0 ps-${Math.min(4, level + 2)}">${entries
-      .map(([key, value]) => {
-        const rendered = renderFlightCheckList(value, level + 1);
-        return `<li><span class="fw-semibold">${key}:</span> ${rendered}</li>`;
-      })
-      .join("")}</ul>`;
-  }

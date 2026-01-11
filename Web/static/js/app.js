@@ -5,6 +5,7 @@ import { initLogsTab } from "./tabs/logs.js";
 import { initWebLogsTab } from "./tabs/web-logs.js";
 import { initCamerasTab } from "./tabs/cameras.js";
 import { initDashboardTab } from "./tabs/dashboard.js";
+import { initRuntimeTab } from "./tabs/runtime.js";
 
 const toast = initToast();
 const shared = {
@@ -22,6 +23,7 @@ const tabModules = {
   "web-logs": initWebLogsTab,
   cameras: initCamerasTab,
   dashboard: initDashboardTab,
+  runtime: initRuntimeTab,
 };
 
 const tabControllers = new Map();

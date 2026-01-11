@@ -1,0 +1,51 @@
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+                <h1 class="h4">Services</h1>
+                <span class="badge text-bg-info">Runtime</span>
+              </div>
+              <div class="row g-3">
+                <div class="col-12">
+                  <div class="card shadow-sm">
+                    <div class="card-header">
+                      <span class="fw-semibold">UniFi runtime</span>
+                    </div>
+                    <div class="card-body">
+                      <div class="d-flex gap-2 flex-wrap align-items-center mb-2">
+                        <button class="btn btn-outline-secondary btn-sm" id="runtimeStartBtn"><i class="bi bi-play me-1"></i>Start services</button>
+                        <button class="btn btn-outline-secondary btn-sm" id="runtimeStopBtn"><i class="bi bi-stop me-1"></i>Stop services</button>
+                        <button class="btn btn-outline-secondary btn-sm" id="runtimeDiscoveryStartBtn"><i class="bi bi-broadcast me-1"></i>Start discovery</button>
+                        <button class="btn btn-outline-secondary btn-sm" id="runtimeDiscoveryStopBtn"><i class="bi bi-broadcast me-1"></i>Stop discovery</button>
+                        <span class="text-muted small" id="runtimeMsg"></span>
+                      </div>
+                      <div class="row g-2 small">
+                        <div class="col-md-6">
+                          <div class="border rounded p-2 bg-body-tertiary" id="runtimeApiStatus">API: unknown</div>
+                        </div>
+                        <div class="col-md-6">
+                          <div class="border rounded p-2 bg-body-tertiary" id="runtimeDiscoveryStatus">Discovery: unknown</div>
+                        </div>
+                        <div class="col-md-6">
+                          <div class="border rounded p-2 bg-body-tertiary" id="runtimeUploadStatus">Upload: unknown</div>
+                        </div>
+                        <div class="col-md-6">
+                          <div class="border rounded p-2 bg-body-tertiary" id="runtimeWssStatus">WSS: unknown</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-12">
+                  <div class="card shadow-sm">
+                    <div class="card-header">
+                      <span class="fw-semibold">WSS manager</span>
+                    </div>
+                    <div class="card-body">
+                      <div class="d-flex gap-2 flex-wrap align-items-center mb-2">
+                        <button class="btn btn-outline-secondary btn-sm" id="runtimeWssStartBtn"><i class="bi bi-plug me-1"></i>Start WSS</button>
+                        <button class="btn btn-outline-secondary btn-sm" id="runtimeWssStopBtn"><i class="bi bi-plug me-1"></i>Stop WSS</button>
+                        <span class="text-muted small" id="runtimeWssMsg"></span>
+                      </div>
+                      <div class="border rounded p-2 bg-body-tertiary small" id="runtimeWssDetail">WSS: unknown</div>
+                    </div>
+                  </div>
+                </div>
+              </div>

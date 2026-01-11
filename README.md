@@ -66,7 +66,7 @@ Replace lan0 with your actual network interface name (e.g., eth0, enp3s0, etc.).
 
 ## UniFi Protect Discovery & Adoption Process
 
-The rewrite mirrors the real UniFi Protect handshake in five stages. Each stage is handled by a dedicated component inside `Unifi/main.py`.
+The rewrite mirrors the real UniFi Protect handshake in five stages. Each stage is handled by a dedicated component inside `Unifi/entry.py`.
 
 | Stage | Triggered By                  | Transport / Port | Entry Point                             | Purpose |
 |-------|------------------------------|------------------|-----------------------------------------|---------|
@@ -111,7 +111,7 @@ The rewrite mirrors the real UniFi Protect handshake in five stages. Each stage 
 
 ### High-Level Program Tree
 ```
-Unifi/main.py
+Unifi/entry.py
 ├─ CameraSettings()                 # loads/saves camera_data/settings.json
 ├─ DiscoveryResponder.start()       # UDP 10001 responder (thread)
 ├─ VerboseAPIServer.start()         # HTTPS /api server (thread)

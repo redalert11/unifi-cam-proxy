@@ -26,7 +26,6 @@ class CameraSettings:
 
         self._ensure_platform_and_sysid()
         self._get_ip_address()
-        self._get_mac_address()
         status = os.environ.get("FIRMWARE_STATUS", "GA")  # GA | RC | EA | ALL
         self._update_latest_firmware_version(status=status)
 
@@ -36,50 +35,37 @@ class CameraSettings:
 
     def _ensure_platform_and_sysid(self):
         changed = False
-        market = self.store.get("marketName")
+        market = self.store.get("device.marketName")
         if not market:
             model = os.environ.get("CAMERA_MODEL", "").strip()
             if not model:
                 self.logger.error("CAMERA_MODEL environment variable is required to set type or platform.")
                 sys.exit(1)
-            changed |= self.store._set_nested("marketName", model)
+            changed |= self.store._set_nested("device.marketName", model)
             market = model
 
-        if not self.store.get("platform"):
+        if not self.store.get("device.platform"):
             platform = CameraModelDatabase.get_platform(market)
             if not platform:
                 self.logger.error(f"Unknown platform for type: {market}")
                 sys.exit(1)
-            changed |= self.store._set_nested("platform", platform)
+            changed |= self.store._set_nested("device.platform", platform)
 
-        if not self.store.get("sysid"):
+        if not self.store.get("device.sysid"):
             sysid = CameraModelDatabase.CameraSysIds.get(market)
             if sysid is None:
                 self.logger.error(f"Unknown system ID for type: {market}")
                 sys.exit(1)
-            changed |= self.store._set_nested("sysid", sysid)
+            changed |= self.store._set_nested("device.sysid", sysid)
 
-        if not self.store.get("type"):
-            changed |= self.store._set_nested("type", market.replace("_", " "))
+        if not self.store.get("device.model"):
+            changed |= self.store._set_nested("device.model", market.replace("_", " "))
 
         if changed:
             self.store._save()
 
-    def _get_mac_address(self, interface="eth0"):
-        if not self.store.get("mac"):
-            try:
-                with open(f"/sys/class/net/{interface}/address") as f:
-                    mac = f.read().strip()
-                    if not mac:
-                        self.logger.error(f"Empty MAC address for interface '{interface}'.")
-                        sys.exit(1)
-                    self.store.set("mac", mac)
-            except FileNotFoundError:
-                self.logger.error(f"Network interface '{interface}' not found.")
-                sys.exit(1)
-
     def _get_ip_address(self):
-        if not self.store.get("host"):
+        if not self.store.get("device.host"):
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     s.connect(("8.8.8.8", 80))
@@ -87,7 +73,7 @@ class CameraSettings:
                     if not ip:
                         self.logger.error("Failed to retrieve IP address.")
                         sys.exit(1)
-                    self.store.set("host", ip)
+                    self.store.set("device.host", ip)
             except Exception as e:
                 self.logger.error(f"Failed to get IP address: {e}")
                 sys.exit(1)
@@ -100,7 +86,7 @@ class CameraSettings:
             return False
         version = str(info["version"])
         try:
-            if self.store._set_nested("firmwareVersion", version, overwrite=True):
+            if self.store._set_nested("device.firmwareVersion", version, overwrite=True):
                 self.store._save()
                 self.logger.info("Latest camera firmware: %s", version)
                 return True
@@ -208,21 +194,145 @@ class CameraSettings:
 
     def _default_settings(self):
         return {
-            "mac": "",                         # MAC address of the device
-            "host": "",                        # Hostname or IP address
-            "type": "",                        # Device type (e.g., camera, sensor)
-            "sysid": "",                       # System hardware identifier
-            "platform": "",                    # Platform string (hardware type)
-            "marketName": "",                  # Commercial model name
-            "firmwareVersion": "",
-            "canAdopt": True,
-            "logging": {
-                "level": "INFO",          # a root/fallback level
-                "api": { "level": "DEBUG" },
-                "discovery": { "level": "INFO" },
-                "uptime": { "level": "INFO" },
-                "wss": { "level": "DEBUG" }
-            }
+            "configVersion": "1.00",
+            "device": {
+                "mac": "",
+                "host": "",
+                "model": "",
+                "platform": "",
+                "sysid": "",
+                "marketName": "",
+                "firmwareVersion": "",
+                "hwrev": 10,
+                "protocolVersion": 67,
+                "semver": "",
+            },
+            "management": {
+                "connectionHost": "",
+                "hosts": [],
+                "protocol": "wss",
+                "controller": "",
+                "nvr": "",
+                "consoleId": "",
+                "consoleName": "",
+                "token": "",
+                "tokenUpdatedAt": "",
+                "timezone": "",
+                "initialized": False,
+                "canAdopt": True,
+            },
+            "capabilities": {
+                "features": {},
+                "profiles": None,
+            },
+            "streams": {},
+            "wss": {
+                "adoptionCode": "",
+                "connectionSecurePort": 7442,
+                "rebootTimeoutSec": 30,
+                "upgradeTimeoutSec": 150,
+                "uptime": 0,
+            },
+            "runtime": {
+                "upSince": 0,
+                "lastSeen": None,
+                "connectedSince": None,
+                "lastReceived": {},
+            },
+        }
+
+    @staticmethod
+    def _normalize_key(key: str) -> str:
+        if key.startswith("mgmt."):
+            return "management." + key[5:]
+        legacy_map = {
+            "mac": "device.mac",
+            "host": "device.host",
+            "type": "device.model",
+            "sysid": "device.sysid",
+            "platform": "device.platform",
+            "marketName": "device.marketName",
+            "firmwareVersion": "device.firmwareVersion",
+        }
+        return legacy_map.get(key, key)
+
+    @staticmethod
+    def format_model_display(market_name: str) -> str:
+        if not market_name:
+            return ""
+        parts = market_name.split("_")
+        def normalize(part: str) -> str:
+            if part.upper() == part and len(part) <= 4:
+                return part.upper()
+            if part.upper().startswith("G") and part[1:].isdigit():
+                return part.upper()
+            return part[:1].upper() + part[1:].lower()
+        return " ".join(normalize(p) for p in parts if p)
+
+    @staticmethod
+    def _extract_semver(version: str) -> str:
+        if not version:
+            return ""
+        import re
+        match = re.search(r"(\\d+\\.\\d+\\.\\d+)", version)
+        return match.group(1) if match else ""
+
+    @classmethod
+    def build_device_block(
+        cls,
+        market_name: str,
+        mac: str,
+        host: str = "",
+        firmware_version: str = "",
+        hwrev: int = 10,
+        protocol_version: int = 67,
+    ) -> dict:
+        if not market_name:
+            raise ValueError("market_name is required")
+        platform = CameraModelDatabase.get_platform(market_name)
+        sysid = CameraModelDatabase.get_sysid(market_name)
+        if not platform or not sysid:
+            raise ValueError(f"Unknown camera model: {market_name}")
+        model_display = cls.format_model_display(market_name)
+        return {
+            "mac": mac or "",
+            "host": host or "",
+            "model": model_display,
+            "platform": platform,
+            "sysid": sysid,
+            "marketName": market_name,
+            "firmwareVersion": firmware_version or "",
+            "hwrev": hwrev,
+            "protocolVersion": protocol_version,
+            "semver": cls._extract_semver(firmware_version),
+        }
+
+    @classmethod
+    def build_settings(
+        cls,
+        market_name: str,
+        mac: str,
+        host: str = "",
+        firmware_version: str = "",
+        streams: dict | None = None,
+    ) -> dict:
+        device = cls.build_device_block(
+            market_name=market_name,
+            mac=mac,
+            host=host,
+            firmware_version=firmware_version,
+        )
+        return {
+            "configVersion": "1.00",
+            "device": device,
+            "management": {
+                "initialized": False,
+                "canAdopt": True,
+            },
+            "capabilities": {},
+            "streams": streams or {},
+            "wss": {},
+            "runtime": {},
         }
 
     def __getitem__(self, key):
@@ -232,6 +342,7 @@ class CameraSettings:
         Usage:
             mac = settings["uplinkDevice.mac"]
         """
+        key = self._normalize_key(key)
         value = self.store.get(key, default=None)
         if value is None and not self.__contains__(key):
             raise KeyError(key)
@@ -244,6 +355,10 @@ class CameraSettings:
         Usage:
             settings["uplinkDevice.mac"] = "00:11:22:33:44:55"
         """
+        key = self._normalize_key(key)
+        if key == "management.initialized" and isinstance(value, bool):
+            # nothing special; allow direct write
+            pass
         self.store.set(key, value)
 
     def __contains__(self, key):
@@ -254,6 +369,7 @@ class CameraSettings:
             if "uplinkDevice.mac" in settings:
                 ...
         """
+        key = self._normalize_key(key)
         return self.store.get(key, default=None) is not None
 
     def get(self, key, default=None):
@@ -263,6 +379,12 @@ class CameraSettings:
         Usage:
             mac = settings.get("uplinkDevice.mac", "00:00:00:00:00:00")
         """
+        if key == "canAdopt":
+            stored = self.store.get("management.canAdopt", default=None)
+            if stored is not None:
+                return bool(stored)
+            return not bool(self.store.get("management.initialized", False))
+        key = self._normalize_key(key)
         return self.store.get(key, default)
 
     def update(self, updates: dict):
@@ -276,7 +398,11 @@ class CameraSettings:
                 "isUpdating": False
             })
         """
-        self.store.update(updates)
+        normalized = {self._normalize_key(k): v for k, v in updates.items()}
+        if "canAdopt" in updates:
+            normalized["management.canAdopt"] = bool(updates["canAdopt"])
+            normalized["management.initialized"] = not bool(updates["canAdopt"])
+        self.store.update(normalized)
 
     def mac_bytes(self, key="mac"):
         """

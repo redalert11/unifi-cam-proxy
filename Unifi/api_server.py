@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional, Tuple
 
-from utils.logging_utils import setup_logger
-from camera_data.camera_settings import CameraSettings
+from Unifi.utils.logging_utils import setup_logger
+from Unifi.camera_data.camera_settings import CameraSettings
 
 # Global WSS thread reference
 wss_task: Optional[threading.Thread] = None
@@ -56,6 +56,8 @@ class VerboseAPIServer:
             return self.RequestHandler(self, *args, **kwargs)
 
         self.server = HTTPServer(("0.0.0.0", port), handler_factory)
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
 
         if self.use_ssl:
             self._ensure_cert_exists()
@@ -357,13 +359,34 @@ class VerboseAPIServer:
         self.logger.info("[+] Self-signed certificate generated.")
 
     def start(self):
+        if self._thread and self._thread.is_alive():
+            return self._thread
+
         def _thread():
             protocol = "HTTPS" if self.use_ssl else "HTTP"
+            self._running = True
             self.logger.info(f"[+] {protocol} API server running on port {self.port}")
-            self.server.serve_forever()
+            try:
+                self.server.serve_forever()
+            finally:
+                self._running = False
 
         self.logger.info(
             "[+] VerboseAPIServer starting; level=%s",
             logging.getLevelName(self.logger.level),
         )
-        threading.Thread(target=_thread, daemon=True, name="APIServer").start()
+        self._thread = threading.Thread(target=_thread, daemon=True, name="APIServer")
+        self._thread.start()
+        return self._thread
+
+    def stop(self):
+        try:
+            self.server.shutdown()
+        finally:
+            try:
+                self.server.server_close()
+            except Exception:
+                pass
+
+    def is_running(self) -> bool:
+        return self._running or bool(self._thread and self._thread.is_alive())
