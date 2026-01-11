@@ -8,6 +8,10 @@ __init__.py
 # Ignore local camera settings file (auto-generated, not meant to be version-controlled)
 *settings.json
 *_Settings.json
+*_state.json
+Unifi/camera_data/settings.json.new
+Web/STEP2_TODO.md
+Web/tapo_stream_probe.py
 
 # ingnore generate ssl cert
 *.pem
