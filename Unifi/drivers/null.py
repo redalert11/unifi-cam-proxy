@@ -27,6 +27,7 @@ class NullDriver(CameraDriver):
         # keep our own map of videoId -> ffmpeg process
         self._push_sessions = {}
         self._stats_task = None
+        self._skip_push = bool(settings.get("wss.skipStreamPush", True) or settings.get("skipStreamPush", False))
 
     async def get_snapshot_jpeg(self, timeout_s: int = 3) -> bytes:
         w, h = 1280, 720
@@ -124,6 +125,14 @@ class NullDriver(CameraDriver):
 
             # Only try to push if we have a valid destination AND ffmpeg
             if can_push and shutil.which("ffmpeg"):
+                if self._skip_push:
+                    await self._stop_push(vid)
+                    entry.update({
+                        "status": "stopped",
+                        "reason": "push disabled",
+                    })
+                    applied["video"][vid] = entry
+                    continue
                 # Write a fresh snapshot to disk
                 jpg = await self.get_snapshot_jpeg(timeout_s=2)
                 still = f"/tmp/still_{vid}.jpg"

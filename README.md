@@ -64,6 +64,8 @@ Replace lan0 with your actual network interface name (e.g., eth0, enp3s0, etc.).
 
 ~~View the documentation at <https://unifi-cam-proxy.com>~~
 
+See `docs/wss_manager.md` for the WSS manager overview and message-handling plan.
+
 ## UniFi Protect Discovery & Adoption Process
 
 The rewrite mirrors the real UniFi Protect handshake in five stages. Each stage is handled by a dedicated component inside `Unifi/entry.py`.

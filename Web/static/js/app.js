@@ -3,9 +3,11 @@ import { initStatusTab } from "./tabs/status.js";
 import { initConfigTab } from "./tabs/config.js";
 import { initLogsTab } from "./tabs/logs.js";
 import { initWebLogsTab } from "./tabs/web-logs.js";
+import { initUnifiLogsTab } from "./tabs/unifi-logs.js";
 import { initCamerasTab } from "./tabs/cameras.js";
 import { initDashboardTab } from "./tabs/dashboard.js";
 import { initRuntimeTab } from "./tabs/runtime.js";
+import { initManageTab } from "./tabs/manage.js";
 
 const toast = initToast();
 const shared = {
@@ -20,10 +22,12 @@ const tabModules = {
   status: initStatusTab,
   config: initConfigTab,
   logs: initLogsTab,
+  "unifi-logs": initUnifiLogsTab,
   "web-logs": initWebLogsTab,
   cameras: initCamerasTab,
   dashboard: initDashboardTab,
   runtime: initRuntimeTab,
+  manage: initManageTab,
 };
 
 const tabControllers = new Map();

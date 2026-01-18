@@ -20,12 +20,16 @@ class WssService:
         token_event,
         stop_event,
         logger: logging.Logger,
+        tcp_in_log: logging.Logger | None = None,
+        tcp_out_log: logging.Logger | None = None,
         driver=None,
     ) -> None:
         self.settings = settings
         self.token_event = token_event
         self.stop_event = stop_event
         self.logger = logger
+        self.tcp_in_log = tcp_in_log
+        self.tcp_out_log = tcp_out_log
         self.driver = driver
         self._manager: Optional[WssManager] = None
 
@@ -38,6 +42,8 @@ class WssService:
             self.token_event,
             self.stop_event,
             self.logger,
+            tcp_in_log=self.tcp_in_log,
+            tcp_out_log=self.tcp_out_log,
             driver=self.driver,
         )
         self._manager.start()

@@ -23,34 +23,37 @@ class RuntimeStatus:
 
 class ServiceRuntime:
     def __init__(self, settings: CameraSettings | None = None) -> None:
-        if not logging.getLogger().handlers:
-            logging.basicConfig(
-                level=logging.INFO,
-                format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-            )
         self.settings = settings or CameraSettings()
 
-        main_log = setup_logger("main", self.settings.get("logging.main.level", logging.INFO))
-        api_log_level = self.settings.get("logging.api.level", logging.DEBUG)
-        disc_log_level = self.settings.get("logging.discovery.level", logging.INFO)
-        wss_log_level = self.settings.get("logging.wss.level", logging.INFO)
-        upload_log_level = self.settings.get("logging.upload_server.level", logging.INFO)
-
-        self.main_log = main_log
-        self.api_log = setup_logger("api_https", api_log_level)
-        self.discovery_log = setup_logger("discovery", disc_log_level)
-        self.wss_log = setup_logger("wss", wss_log_level)
-        self.upload_log = setup_logger("upload_server", upload_log_level)
+        # Always capture full logs for the web UI (in-memory filtering happens in the UI).
+        log_level = logging.DEBUG
+        self.main_log = setup_logger("main", log_level)
+        self.api_log = setup_logger("api_https", log_level)
+        self.discovery_log = setup_logger("discovery", log_level)
+        mac = (self.settings.get("mac", "") or "").strip()
+        wss_logger_name = f"wss.{mac}" if mac else "wss"
+        self.wss_log = setup_logger(wss_logger_name, log_level)
+        self.wss_tcp_in_log = setup_logger(f"{wss_logger_name}.tcp_in", log_level) if mac else None
+        self.wss_tcp_out_log = setup_logger(f"{wss_logger_name}.tcp_out", log_level) if mac else None
+        self.upload_log = setup_logger("upload_server", log_level)
 
         self.token_event = threading.Event()
         self.stop_event = threading.Event()
 
         self.driver = build_camera_driver(self.settings, self.wss_log)
 
-        self.api_service = ApiService(self.settings, self.api_log, self.token_event, driver=self.driver)
+        self.api_service = ApiService(self.settings, self.api_log, self.token_event)
         self.discovery_service = DiscoveryService(self.settings, self.discovery_log)
         self.upload_service = UploadService(self.upload_log)
-        self.wss_service = WssService(self.settings, self.token_event, self.stop_event, self.wss_log, driver=self.driver)
+        self.wss_service = WssService(
+            self.settings,
+            self.token_event,
+            self.stop_event,
+            self.wss_log,
+            tcp_in_log=self.wss_tcp_in_log,
+            tcp_out_log=self.wss_tcp_out_log,
+            driver=self.driver,
+        )
 
         self._uptime_thread: threading.Thread | None = None
 
@@ -61,7 +64,7 @@ class ServiceRuntime:
         self.settings.update({"upSince": now_ms, "lastSeen": None, "uptime": 0, "connectedSince": None})
         self._uptime_thread = threading.Thread(
             target=increment_uptime,
-            args=(self.settings, setup_logger("uptime", self.settings.get("logging.uptime.level", logging.INFO))),
+            args=(self.settings, setup_logger("uptime", log_level)),
             daemon=True,
             name="UptimeThread",
         )

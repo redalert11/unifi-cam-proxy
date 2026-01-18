@@ -24,6 +24,8 @@ export function initRuntimeTab(root, { api }) {
     const discovery = status.discovery || {};
     const upload = status.upload || {};
     const wss = status.wss || {};
+    const mgmt = status.management || {};
+    const adoptLabel = mgmt.initialized ? "seen" : "pending";
 
     setStatus(
       runtimeApiStatus,
@@ -31,7 +33,7 @@ export function initRuntimeTab(root, { api }) {
     );
     setStatus(
       runtimeDiscoveryStatus,
-      `Discovery: ${discovery.running ? "running" : "stopped"} | canAdopt=${discovery.can_adopt ? "true" : "false"}`
+      `Discovery: ${discovery.running ? "running" : "stopped"} | canAdopt=${discovery.can_adopt ? "true" : "false"} | adoption=${adoptLabel}`
     );
     setStatus(runtimeUploadStatus, `Upload: ${upload.running ? "running" : "stopped"} on ${upload.port || "?"}`);
     setStatus(

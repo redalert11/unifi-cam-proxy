@@ -1,0 +1,41 @@
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+  <h1 class="h4">UniFi Logs</h1>
+  <span class="badge text-bg-secondary">in-memory tail</span>
+</div>
+<div class="card shadow-sm">
+  <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <div class="d-flex align-items-center gap-2">
+      <i class="bi bi-terminal"></i>
+      <span class="fw-semibold">UniFi logs</span>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <select class="form-select form-select-sm" id="unifiLogSource" style="width: 140px;">
+        <option value="main">main</option>
+        <option value="api_https">api</option>
+        <option value="discovery">discovery</option>
+        <option value="upload_server">upload</option>
+        <option value="uptime">uptime</option>
+        <option value="wss">wss</option>
+      </select>
+      <select class="form-select form-select-sm d-none" id="unifiLogCamera" style="width: 180px;"></select>
+      <select class="form-select form-select-sm d-none" id="unifiLogChannel" style="width: 140px;">
+        <option value="general">general</option>
+        <option value="tcp_in">tcp in</option>
+        <option value="tcp_out">tcp out</option>
+      </select>
+      <label class="form-label mb-0 small text-muted" for="unifiLogLines">lines</label>
+      <input type="number" class="form-control form-control-sm" id="unifiLogLines" value="200" min="10" max="2000" step="10" style="width: 90px;">
+      <select class="form-select form-select-sm" id="unifiLogLevel" style="width: 110px;">
+        <option value="ALL" selected>All levels</option>
+        <option value="INFO">Info+</option>
+        <option value="WARN">Warn+</option>
+        <option value="ERROR">Error</option>
+      </select>
+      <button class="btn btn-sm btn-outline-secondary" id="unifiLogRefresh"><i class="bi bi-arrow-repeat me-1"></i>Refresh</button>
+      <button class="btn btn-sm btn-outline-success" id="unifiLogFollow"><i class="bi bi-play-fill me-1"></i>Follow</button>
+    </div>
+  </div>
+  <div class="card-body">
+    <pre class="bg-body-tertiary p-3 rounded small" style="max-height: 520px; overflow: auto;" id="unifiLogBox" tabindex="0" aria-label="UniFi log output">Select a source and click Refresh.</pre>
+  </div>
+</div>

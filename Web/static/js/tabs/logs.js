@@ -7,7 +7,6 @@ export function initLogsTab(root, { api, toast, filterLinesByLevel }) {
   const logLevelSelect = root.querySelector("#logLevel");
   const logFollowBtn = root.querySelector("#logFollow");
   const logSaveToggle = root.querySelector("#logSaveToggle");
-
   if (!logRefreshBtn || !logLinesInput || !logBox) {
     return { start() {}, stop() {} };
   }
@@ -151,6 +150,7 @@ export function initLogsTab(root, { api, toast, filterLinesByLevel }) {
       logFollowBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Follow';
     }
   }
+
 
   return {
     start() {

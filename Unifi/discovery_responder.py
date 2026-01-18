@@ -46,6 +46,9 @@ class DiscoveryResponder:
         self.settings = settings
         self.log = logger or logging.getLogger("camera_app")
 
+    def _log_packet(self, direction: str, addr, data: bytes):
+        self.log.debug("Discovery %s %s | bytes=%d hex=%s", direction, addr, len(data), data.hex())
+
     def build_field(self, field_id, data: bytes) -> bytes:
         # 1 byte id, 2 byte length (big-endian), then data
         return struct.pack(">BH", field_id, len(data)) + data
@@ -136,7 +139,7 @@ class DiscoveryResponder:
             except socket.timeout:
                 continue
 
-            self.log.debug(f"Received discovery from {addr} | Raw: {data.hex()}")
+            self._log_packet("RX", addr, data)
 
             # Basic match for "\x01\x00\x00\x00" (version=1, cmd=0, length=0)
             if data[:4] == b"\x01\x00\x00\x00":
@@ -146,5 +149,5 @@ class DiscoveryResponder:
                     self.log.error(f"Failed to build discovery response: {e}")
                     continue
 
-                self.log.debug(f"Sending discovery response: {response.hex()}")
+                self._log_packet("TX", addr, response)
                 sock.sendto(response, addr)

@@ -16,8 +16,11 @@ import yaml
 
 try:
     from Unifi.utils.settings_manager import SettingsManager
+    from Unifi.camera_data.camera_settings import CameraSettings
+    from Unifi.utils.logging_utils import get_log_buffer, list_log_sources, setup_logger
 except ImportError:
     from ..Unifi.utils.settings_manager import SettingsManager  # type: ignore
+    from ..Unifi.utils.logging_utils import get_log_buffer, list_log_sources, setup_logger  # type: ignore
 
 try:
     from Unifi.camera_data.camera_models import CameraModelDatabase
@@ -55,11 +58,14 @@ except ImportError:
 
 try:
     from Unifi.services.runtime import ServiceRuntime
+    from Unifi.services.upload_service import UploadService
 except ImportError:
     try:
         from .services.runtime import ServiceRuntime  # type: ignore
+        from .services.upload_service import UploadService  # type: ignore
     except ImportError:
         ServiceRuntime = None  # type: ignore
+        UploadService = None  # type: ignore
 
 app = FastAPI(title="UniFi Cam Proxy Supervisor", version="0.1.0")
 
@@ -298,6 +304,10 @@ WEB_LOG_MAX_BYTES = 5_000_000
 WEB_LOG_BACKUP_COUNT = 3
 
 _unifi_runtime = None
+_unifi_runtime_settings = None
+_wss_runtimes = {}
+_upload_service = None
+_upload_logger = None
 
 
 def _get_unifi_runtime():
@@ -307,6 +317,51 @@ def _get_unifi_runtime():
     if _unifi_runtime is None:
         _unifi_runtime = ServiceRuntime()
     return _unifi_runtime
+
+
+def _sync_discovery_state(runtime: "ServiceRuntime"):
+    actual_running = bool(runtime.discovery_service.status().running)
+    recorded_running = bool(process_state_store.get("discovery.running", False))
+    if recorded_running and not actual_running:
+        process_state_store.update(
+            {
+                "discovery.running": False,
+                "discovery.camera": "",
+                "discovery.last_error": "",
+            }
+        )
+    elif actual_running and not recorded_running:
+        process_state_store.update({"discovery.running": True})
+
+
+def _set_unifi_runtime(settings_path: Path):
+    global _unifi_runtime, _unifi_runtime_settings
+    if ServiceRuntime is None:
+        raise HTTPException(status_code=500, detail="Unifi runtime not available")
+    runtime = ServiceRuntime(CameraSettings(settings_file=str(settings_path)))
+    _unifi_runtime = runtime
+    _unifi_runtime_settings = str(settings_path)
+    return runtime
+
+
+def _get_upload_service():
+    global _upload_service, _upload_logger
+    if UploadService is None:
+        return None
+    if _upload_service is None:
+        if _upload_logger is None:
+            _upload_logger = setup_logger("upload_server", logging.INFO)
+        _upload_service = UploadService(_upload_logger)
+    return _upload_service
+
+
+def _get_wss_runtime(settings_path: Path):
+    key = settings_path.name
+    runtime = _wss_runtimes.get(key)
+    if runtime is None:
+        runtime = ServiceRuntime(CameraSettings(settings_file=str(settings_path)))
+        _wss_runtimes[key] = runtime
+    return runtime
 
 
 def _set_web_file_logging(enabled: bool):
@@ -992,15 +1047,48 @@ def flightcheck_stream(
 @app.get("/api/unifi/status")
 def unifi_status():
     runtime = _get_unifi_runtime()
+    _sync_discovery_state(runtime)
     status = runtime.status()
     discovery_state = process_state_store.all().get("discovery", {})
+    mgmt_initialized = bool(runtime.settings.get("mgmt.initialized", False))
+    mgmt_last_adopted = runtime.settings.get("mgmt.lastAdoptedAt", "")
+    wss_active = []
+    for key, rt in _wss_runtimes.items():
+        try:
+            if rt.wss_service.status().running:
+                wss_active.append(key)
+        except Exception:
+            continue
     return {
         "api": status.api.__dict__,
         "discovery": status.discovery.__dict__,
         "wss": status.wss.__dict__,
         "upload": status.upload.__dict__,
+        "management": {
+            "initialized": mgmt_initialized,
+            "lastAdoptedAt": mgmt_last_adopted,
+        },
+        "active_settings": _unifi_runtime_settings,
+        "wss_active": wss_active,
         "discovery_lock": discovery_state,
     }
+
+
+@app.get("/api/unifi/logs/sources")
+def unifi_log_sources(prefix: str | None = Query(None)):
+    sources = list_log_sources(prefix=prefix)
+    return {"sources": sources}
+
+
+@app.get("/api/unifi/logs")
+def unifi_logs(
+    source: str = Query(..., description="Logger name (e.g., wss.<MAC> or api_https)"),
+    lines: int = Query(200, ge=1, le=2000),
+):
+    if not source:
+        raise HTTPException(status_code=400, detail="source is required")
+    output = get_log_buffer(source, max_lines=lines)
+    return {"source": source, "lines": output}
 
 
 @app.get("/api/unifi/camera-models")
@@ -1133,11 +1221,15 @@ def unifi_generate_settings(payload: dict = Body(...)):
         }
         mapped.append(channel_label)
 
+    firmware_version = (payload.get("firmwareVersion") or "").strip()
+    if not firmware_version:
+        firmware_version = CameraSettings.fetch_latest_firmware_version(status="GA")
+
     settings_payload = CameraSettings.build_settings(
         market_name=model,
         mac=mac_value,
         host=payload.get("host") or "",
-        firmware_version=payload.get("firmwareVersion") or "",
+        firmware_version=firmware_version,
         streams=streams_section,
     )
 
@@ -1172,6 +1264,7 @@ def unifi_delete_settings(payload: dict = Body(...)):
 def unifi_runtime_start():
     runtime = _get_unifi_runtime()
     runtime.start_all()
+    _sync_discovery_state(runtime)
     return unifi_status()
 
 
@@ -1182,15 +1275,146 @@ def unifi_runtime_stop():
     return unifi_status()
 
 
-@app.post("/api/unifi/discovery/start")
-def unifi_discovery_start():
+@app.post("/api/unifi/api/start")
+def unifi_api_start(payload: dict = Body(None)):
     runtime = _get_unifi_runtime()
+    filename = (payload or {}).get("settings")
+    if filename:
+        settings_dir = Path(__file__).resolve().parent.parent / "Unifi" / "camera_data"
+        settings_path = (settings_dir / filename).resolve()
+        if settings_dir not in settings_path.parents or not settings_path.exists():
+            raise HTTPException(status_code=404, detail="settings file not found")
+        runtime = _set_unifi_runtime(settings_path)
+    runtime.api_service.start()
+    return unifi_status()
+
+
+@app.post("/api/unifi/api/stop")
+def unifi_api_stop():
+    runtime = _get_unifi_runtime()
+    runtime.api_service.stop()
+    return unifi_status()
+
+
+def _list_camera_settings():
+    settings_dir = Path(__file__).resolve().parent.parent / "Unifi" / "camera_data"
+    files = sorted(settings_dir.glob("*_Settings.json"))
+    cameras = []
+    for path in files:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        device = data.get("device") or {}
+        mgmt = data.get("management") or {}
+        streams = data.get("streams") or {}
+        stream0 = streams.get("stream0") or {}
+        name = device.get("name") or device.get("marketName") or device.get("model") or path.stem
+        mac = device.get("mac") or ""
+        host = device.get("host") or ""
+        can_adopt = mgmt.get("canAdopt")
+        if isinstance(can_adopt, str):
+            can_adopt = can_adopt.strip().lower() in ("true", "1", "yes")
+        if can_adopt is None:
+            can_adopt = not bool(mgmt.get("initialized", False))
+        status = process_state_store.get(f"cameras.{path.name}.status", "stopped")
+        wss_runtime = _wss_runtimes.get(path.name)
+        wss_running = False
+        if wss_runtime is not None:
+            wss_running = bool(wss_runtime.wss_service.status().running)
+        go2rtc_channel = stream0.get("go2rtcChannel") or ""
+        cameras.append(
+            {
+                "id": path.name,
+                "name": name,
+                "model": device.get("model") or "",
+                "marketName": device.get("marketName") or "",
+                "mac": mac,
+                "host": host,
+                "canAdopt": bool(can_adopt),
+                "status": status,
+                "wssRunning": wss_running,
+                "go2rtcChannel": go2rtc_channel,
+                "path": str(path),
+            }
+        )
+    return cameras
+
+
+@app.get("/api/unifi/cameras")
+def unifi_list_cameras():
+    return {"cameras": _list_camera_settings()}
+
+
+@app.post("/api/unifi/camera/start")
+def unifi_start_camera(payload: dict = Body(...)):
+    filename = (payload.get("settings") or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="settings is required")
+    settings_dir = Path(__file__).resolve().parent.parent / "Unifi" / "camera_data"
+    settings_path = (settings_dir / filename).resolve()
+    if settings_dir not in settings_path.parents or not settings_path.exists():
+        raise HTTPException(status_code=404, detail="settings file not found")
+
+    runtime = _set_unifi_runtime(settings_path)
+    runtime.stop_all()
+
+    can_adopt = runtime.settings.get("canAdopt", True)
+    runtime._start_uptime()
+    if can_adopt:
+        if process_state_store.get("discovery.running", False):
+            raise HTTPException(status_code=409, detail="Discovery already running")
+        runtime.discovery_service.start()
+        process_state_store.update(
+            {
+                "discovery.running": True,
+                "discovery.camera": filename,
+                "discovery.started_at": datetime.utcnow().isoformat() + "Z",
+                "discovery.last_error": "",
+            }
+        )
+    runtime.api_service.start()
+    runtime.upload_service.start()
+    runtime.wss_service.start()
+    process_state_store.update({f"cameras.{filename}.status": "running"})
+    return unifi_status()
+
+
+@app.post("/api/unifi/camera/stop")
+def unifi_stop_camera(payload: dict = Body(...)):
+    filename = (payload.get("settings") or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="settings is required")
+    runtime = _get_unifi_runtime()
+    runtime.stop_all()
+    process_state_store.update(
+        {
+            f"cameras.{filename}.status": "stopped",
+            "discovery.running": False,
+            "discovery.camera": "",
+        }
+    )
+    return unifi_status()
+
+
+@app.post("/api/unifi/discovery/start")
+def unifi_discovery_start(payload: dict = Body(None)):
+    runtime = _get_unifi_runtime()
+    _sync_discovery_state(runtime)
+    filename = (payload or {}).get("settings")
+    if filename:
+        settings_dir = Path(__file__).resolve().parent.parent / "Unifi" / "camera_data"
+        settings_path = (settings_dir / filename).resolve()
+        if settings_dir not in settings_path.parents or not settings_path.exists():
+            raise HTTPException(status_code=404, detail="settings file not found")
+        runtime = _set_unifi_runtime(settings_path)
     if process_state_store.get("discovery.running", False):
         raise HTTPException(status_code=409, detail="Discovery already running")
     runtime.discovery_service.start()
     process_state_store.update(
         {
             "discovery.running": True,
+            "discovery.camera": filename or "",
             "discovery.started_at": datetime.utcnow().isoformat() + "Z",
             "discovery.last_error": "",
         }
@@ -1212,16 +1436,46 @@ def unifi_discovery_stop():
 
 
 @app.post("/api/unifi/wss/start")
-def unifi_wss_start():
-    runtime = _get_unifi_runtime()
+def unifi_wss_start(payload: dict = Body(...)):
+    filename = (payload.get("settings") or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="settings is required")
+    settings_dir = Path(__file__).resolve().parent.parent / "Unifi" / "camera_data"
+    settings_path = (settings_dir / filename).resolve()
+    if settings_dir not in settings_path.parents or not settings_path.exists():
+        raise HTTPException(status_code=404, detail="settings file not found")
+    runtime = _get_wss_runtime(settings_path)
+    if runtime.wss_service.status().running:
+        raise HTTPException(status_code=409, detail="WSS already running for this settings file")
     runtime.wss_service.start()
+    process_state_store.update({f"cameras.{filename}.wss": "running"})
     return unifi_status()
 
 
 @app.post("/api/unifi/wss/stop")
-def unifi_wss_stop():
-    runtime = _get_unifi_runtime()
+def unifi_wss_stop(payload: dict = Body(...)):
+    filename = (payload.get("settings") or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="settings is required")
+    runtime = _wss_runtimes.get(filename)
+    if runtime is None:
+        raise HTTPException(status_code=404, detail="WSS runtime not found")
     runtime.wss_service.stop()
+    process_state_store.update({f"cameras.{filename}.wss": "stopped"})
+    return unifi_status()
+
+
+@app.post("/api/unifi/upload/start")
+def unifi_upload_start():
+    runtime = _get_unifi_runtime()
+    runtime.upload_service.start()
+    return unifi_status()
+
+
+@app.post("/api/unifi/upload/stop")
+def unifi_upload_stop():
+    runtime = _get_unifi_runtime()
+    runtime.upload_service.stop()
     return unifi_status()
 
 

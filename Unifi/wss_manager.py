@@ -9,19 +9,11 @@ Structured UniFi Protect AVClient WebSocket manager with:
   5. Protocol core responsible for parsing/dispatching.
   6. Thread wrapper that owns connection + reconnection logic.
 
-Environment knobs (set before running python):
-  export SNAPSHOT_DEBUG=true                   # save latest snapshot to debug_snaps
-  export SNAPSHOT_DEBUG_DIR=/path/to/dir       # override snapshot output directory
-  export WSS_LOG_ONLY=\"fn1,fn2\"              # only log these functionNames
-  export WSS_SILENCE=\"fn1,fn2\"               # suppress logging for these functionNames
-  export WSS_THROTTLE=60                       # throttle NetworkStatus/GetSystemStats logging (seconds)
-  export WSS_CAPTURE_FILE=/tmp/wss.ndjson      # enable JSONL capture of RX messages
-  export WSS_CAPTURE_UNIQUE=false              # capture every message (even duplicates)
-  export WSS_CAPTURE_UNIQUE_LIMIT=500          # how many hashes to keep for dedupe
-  export WSS_DISABLE_SECURE_TRANSFER=true      # skip secure_transfer subprotocol
 """
 
 # Debug tip: on the UniFi Protect controller, run `tail -f /volume1/.srv/unifi-protect/logs/cameras.log` to watch camera logs live.
+
+# TODO: remove temporary settings once handshake is stable: wss.minimalMode, wss.skipHello.
 
 # TODO (Protect interoperability backlog):
 # - ChangeSmartMotionSettings: accept/ack enhanced motion config (sample payload sanitized from debug log).
@@ -37,6 +29,7 @@ import io
 import json
 import logging
 import os
+import re
 import ssl
 import threading
 import time
@@ -58,89 +51,6 @@ from websockets.exceptions import ConnectionClosed  # type: ignore
 
 from Unifi.drivers.camera_factory import build_camera_driver
 
-HELLO_FEATURES = {
-    "accelerometer": True,
-    "adjustableIR": False,
-    "adjustableSpeakerVolume": False,
-    "aec": ["fullband"],
-    "aecTalkbackSwitch": False,
-    "audioCodecs": ["aac", "opus"],
-    "autoICROnly": True,
-    "battery": False,
-    "bitrateReduction": ["idleFps"],
-    "bluetooth": False,
-    "canLoadEncryptedFW": True,
-    "chimeControl": False,
-    "clarityZones": {"maxZones": 16, "rectangleOnly": False},
-    "doorAccessConfig": False,
-    "endlesspan": False,
-    "excludeZone": {"maxZones": 16, "rectangleOnly": True},
-    "externalIR": False,
-    "externalIRAutodetect": False,
-    "fingerprint": False,
-    "fisheye": False,
-    "flash": False,
-    "fullHdSnapshot": True,
-    "hallwayMode": False,
-    "hallwayModeHdrOnRequired": False,
-    "hdr": True,
-    "hotplug": {"extender": {"attached": False}},
-    "lcdScreen": False,
-    "ldc": True,
-    "ledIR": True,
-    "ledStatus": True,
-    "lidar": False,
-    "lightningZoom": False,
-    "lineIn": False,
-    "locate": False,
-    "luxCheck": True,
-    "magicZoom": False,
-    "maxScaleDownLevel": 1,
-    "mic": True,
-    "motionDetect": ["enhanced"],
-    "nfc": False,
-    "opticalZoom": False,
-    "optimizeIR": False,
-    "opusSampleRates": [12000, 16000, 24000, 48000],
-    "orientation": True,
-    "pirMotionDetect": False,
-    "presetTour": False,
-    "privacyMask": True,
-    "privacyMasks": {"maxZones": 16, "rectangleOnly": False},
-    "ptz": False,
-    "resetIC": True,
-    "rtc": False,
-    "sdmmc": False,
-    "smartDetect": [
-        "person",
-        "vehicle",
-        "animal",
-        "lineCrossing",
-        "faceEnhancedByAiKey",
-        "lprEnhancedByAiKey",
-        "alrmSmoke",
-        "alrmCmonx",
-        "alrmBabyCry",
-        "alrmSpeak",
-    ],
-    "smokeCover": False,
-    "speaker": True,
-    "squareEventThumbnail": True,
-    "streamEncryptable": True,
-    "supportCustomRingtone": False,
-    "touchFocus": False,
-    "truedaynight": True,
-    "verticalFlipWarning": False,
-    "videoCodecs": ["h264", "h265", "mjpg"],
-    "videoMode": ["default", "highFps", "sport", "slowShutter"],
-    "videoModeMaxFps": [24, 48, 24, 20],
-    "videoSourceCount": 2,
-    "wifi": False,
-}
-HELLO_PROTOCOL_VERSION = 67
-HELLO_REBOOT_TIMEOUT_SEC = 30
-HELLO_UPGRADE_TIMEOUT_SEC = 150
-
 
 # --------------------------------------------------------------------------- #
 # 1. Config & small utilities                                                 #
@@ -159,6 +69,45 @@ def _parse_hostport(hostport: str, default_port: int = 7442) -> Tuple[str, int]:
         except ValueError:
             return host, default_port
     return hostport, default_port
+
+
+def _get_setting(settings, keys: Iterable[str], allow_empty: bool = False) -> Any:
+    for key in keys:
+        val = settings.get(key)
+        if val is None:
+            continue
+        if isinstance(val, str) and not val.strip() and not allow_empty:
+            continue
+        return val
+    return None
+
+
+def _require_setting(settings, keys: Iterable[str], name: str, allow_empty: bool = False) -> Any:
+    val = _get_setting(settings, keys, allow_empty=allow_empty)
+    if val is None:
+        raise ValueError(f"Missing required setting: {name}")
+    return val
+
+
+def _extract_semver(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    match = re.search(r"(\d+\.\d+\.\d+)", value)
+    if not match:
+        return ""
+    return match.group(1)
+
+
+def _semver_safe_fw_version(fw_version: str, semver: str) -> str:
+    if re.match(r"^\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?$", fw_version or ""):
+        return fw_version
+    base = semver or _extract_semver(fw_version) or "0.0.0"
+    if not fw_version:
+        return base
+    build = re.sub(r"[^0-9A-Za-z.-]", ".", fw_version).strip(".")
+    if build:
+        return f"{base}+{build}"
+    return base
 
 
 @dataclass
@@ -192,33 +141,18 @@ class WssConfig:
 
     @staticmethod
     def from_env() -> "WssConfig":
-        log_only = {s.strip() for s in os.getenv("WSS_LOG_ONLY", "").split(",") if s.strip()}
-        silence = {s.strip() for s in os.getenv("WSS_SILENCE", "").split(",") if s.strip()}
-        throttle = float(os.getenv("WSS_THROTTLE", "0") or 0)
-
-        capture_path = os.getenv("WSS_CAPTURE_FILE", "").strip()
-        capture_enabled = bool(capture_path)
-        capture_unique = os.getenv("WSS_CAPTURE_UNIQUE", "1").strip().lower() not in {"0", "false"}
-        capture_limit = int(os.getenv("WSS_CAPTURE_UNIQUE_LIMIT", "1000") or 1000)
-
-        snapshot_debug = os.getenv("SNAPSHOT_DEBUG", "").strip().lower() in {"true", "1", "yes"}
-        snapshot_dir = Path(os.getenv("SNAPSHOT_DEBUG_DIR", str(WssConfig.snapshot_debug_dir)))
-        snapshot_keep = int(os.getenv("SNAPSHOT_DEBUG_KEEP", "5") or 5)
-
-        use_secure = os.getenv("WSS_DISABLE_SECURE_TRANSFER", "").strip().lower() not in {"1", "true"}
-
         return WssConfig(
-            use_secure_transfer=use_secure,
-            log_only=log_only,
-            silence=silence,
-            throttle_secs=throttle,
-            capture_enabled=capture_enabled,
-            capture_file=Path(capture_path) if capture_enabled else None,
-            capture_unique=capture_unique,
-            capture_unique_limit=capture_limit,
-            snapshot_debug=snapshot_debug,
-            snapshot_debug_dir=snapshot_dir,
-            snapshot_debug_keep=snapshot_keep,
+            use_secure_transfer=True,
+            log_only=set(),
+            silence=set(),
+            throttle_secs=0.0,
+            capture_enabled=False,
+            capture_file=None,
+            capture_unique=True,
+            capture_unique_limit=1000,
+            snapshot_debug=False,
+            snapshot_debug_dir=WssConfig.snapshot_debug_dir,
+            snapshot_debug_keep=WssConfig.snapshot_debug_keep,
         )
 
 
@@ -314,12 +248,16 @@ SCHEMAS: Dict[str, MessageSchema] = {
     "ubnt_avclient_paramAgreement": MessageSchema(
         payload_optional_keys=["enableStatusCodes", "useHeartbeats", "heartbeatsTimeoutMs"],
     ),
+    "EventPoorNetwork": MessageSchema(
+        payload_optional_keys=["isPoor", "startOffsetMSec", "stopStreamLevel"],
+    ),
     "GetSystemStats": MessageSchema(),
     "NetworkStatus": MessageSchema(),
     "ChangeVideoSettings": MessageSchema(
         payload_optional_keys=["video", "videoMode", "hdrMode", "downScaleMode"],
     ),
     "ChangeIspSettings": MessageSchema(),
+    "ChangeAudioEventsSettings": MessageSchema(),
     "ChangeOsdSettings": MessageSchema(),
     "ChangeSoundLedSettings": MessageSchema(),
     "ChangeTalkbackSettings": MessageSchema(),
@@ -337,6 +275,73 @@ SCHEMAS: Dict[str, MessageSchema] = {
         payload_required_keys=["uri"],
         volatile_payload_keys=["uri"],
     ),
+    "UpdateFirmwareRequest": MessageSchema(
+        payload_required_keys=["uri", "timeoutMs", "md5"],
+        payload_optional_keys=["fwPath"],
+        volatile_payload_keys=["uri", "fwPath"],
+    ),
+}
+
+DEFAULT_CHANGE_ISP_PAYLOAD: Dict[str, Any] = {
+    "aeMode": "auto",
+    "aeTargetPercent": 50,
+    "afExtendRange": 0,
+    "aggressiveAntiFlicker": 0,
+    "autoFlipMirror": 1,
+    "autoFreq": 60,
+    "awbAlgoMethod": "advanced",
+    "brightness": 50,
+    "contrast": 50,
+    "criticalTmpOfProtect": 40,
+    "dZoomCenterX": 50,
+    "dZoomCenterY": 50,
+    "dZoomScale": 0,
+    "dZoomStreamId": 4,
+    "darkAreaCompensateLevel": 0,
+    "denoise": 50,
+    "enable3dnr": 1,
+    "enableExternalIr": 0,
+    "enableMicroTmpProtect": 1,
+    "enablePauseMotion": 0,
+    "flip": 0,
+    "focusMode": "ztrig",
+    "focusPosition": 0,
+    "forceFilterIrSwitchEvents": 0,
+    "hdrMode": "normal",
+    "hue": 50,
+    "icrCustomValue": 2,
+    "icrLightSensorNightThd": 0,
+    "icrSensitivity": 0,
+    "icrSwitchMode": "lux",
+    "irLedLevel": 0,
+    "irLedMode": "manual",
+    "irOnStsBrightness": 0,
+    "irOnStsContrast": 0,
+    "irOnStsDenoise": 0,
+    "irOnStsHue": 0,
+    "irOnStsSaturation": 0,
+    "irOnStsSharpness": 0,
+    "irOnStsWdr": 0,
+    "irOnValBrightness": 50,
+    "irOnValContrast": 50,
+    "irOnValDenoise": 50,
+    "irOnValHue": 50,
+    "irOnValSaturation": 50,
+    "irOnValSharpness": 50,
+    "irOnValWdr": 1,
+    "isDayMode": 1,
+    "lensDistortionCorrection": 1,
+    "masks": {"0": None},
+    "mirror": 0,
+    "queryIrLedStatus": 0,
+    "saturation": 50,
+    "sceneMode": "auto",
+    "sharpness": 50,
+    "touchFocusX": 671,
+    "touchFocusY": 116,
+    "wdr": 1,
+    "zonesAutoFlipMirror": 0,
+    "zoomPosition": 0,
 }
 
 
@@ -485,7 +490,8 @@ class BaseHandlers:
         self.protocol = protocol
 
     def _device_id(self) -> str:
-        return (self.settings.get("mac") or "").upper()
+        mac = _require_setting(self.settings, ["device.mac", "mac"], "device.mac")
+        return str(mac).upper()
 
     async def _reply_ok(self, ws: WebSocketClientProtocol, msg: ControllerMessage, extra: Optional[Dict[str, Any]] = None):
         payload: Dict[str, Any] = {"statusCode": 0, "status": "ok", "deviceID": self._device_id()}
@@ -509,14 +515,27 @@ class BaseHandlers:
 
 class MaintenanceHandlers(BaseHandlers):
     async def on_param_agreement(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
-        if msg.expects_response():
-            await self._reply_ok(ws, msg)
-
-    async def on_time_sync(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
-        now_ms = int(time.time() * 1000)
-        payload = {"t1": now_ms, "t2": now_ms}
+        if not msg.expects_response():
+            return
+        token = _get_setting(
+            self.settings,
+            ["management.token", "mgmt.token", "wss.authToken", "authToken"],
+            allow_empty=True,
+        ) or ""
+        payload = {"authToken": token}
         out = self.protocol.build_reply(msg, payload)
         await self.protocol.send(ws, out)
+
+    async def on_time_sync(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        payload = {"timeDelta": 0}
+        out = self.protocol.build_reply(msg, payload)
+        await self.protocol.send(ws, out)
+
+    async def on_event_poor_network(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        incoming = msg.payload if isinstance(msg.payload, dict) else {}
+        self._persist_incoming_payload(msg.function_name, incoming)
+        if msg.expects_response():
+            await self._reply_ok(ws, msg, incoming)
 
     async def on_get_system_stats(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
         if not msg.expects_response():
@@ -525,7 +544,7 @@ class MaintenanceHandlers(BaseHandlers):
             "cpu": 5,
             "memory": 20,
             "temperature": 45,
-            "uptime": int(self.settings.get("uptime", 0) or 0),
+            "uptime": int(_require_setting(self.settings, ["runtime.uptime", "uptime"], "runtime.uptime") or 0),
             "statusCode": 0,
             "status": "ok",
             "deviceID": self._device_id(),
@@ -536,10 +555,12 @@ class MaintenanceHandlers(BaseHandlers):
     async def on_network_status(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
         if not msg.expects_response():
             return
+        ip = _require_setting(self.settings, ["device.host", "host"], "device.host")
+        mac = _require_setting(self.settings, ["device.mac", "mac"], "device.mac")
         payload = {
             "status": "connected",
-            "ip": self.settings.get("host"),
-            "mac": (self.settings.get("mac") or "").lower(),
+            "ip": ip,
+            "mac": str(mac).lower(),
             "statusCode": 0,
             "deviceID": self._device_id(),
         }
@@ -560,6 +581,22 @@ class MaintenanceHandlers(BaseHandlers):
 
 
 class SettingsHandlers(BaseHandlers):
+    async def _send_firmware_status(self, ws: WebSocketClientProtocol, status: str) -> None:
+        payload = {"status": status}
+        msg = CameraMessage(
+            function_name="EventUpdateFirmwareStatus",
+            message_id=self.protocol._next_msg_id(),
+            in_response_to=0,
+            payload=payload,
+        )
+        await self.protocol.send(ws, msg)
+
+    async def on_change_audio_events_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        if msg.expects_response():
+            incoming = msg.payload if isinstance(msg.payload, dict) else {}
+            self._persist_incoming_payload(msg.function_name, incoming)
+            await self._reply_ok(ws, msg, incoming)
+
     async def on_change_osd_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
         if msg.expects_response():
             incoming = msg.payload if isinstance(msg.payload, dict) else {}
@@ -616,6 +653,23 @@ class SettingsHandlers(BaseHandlers):
         }
 
         video = payload.get("video")
+        if not isinstance(video, dict):
+            video = _get_setting(
+                self.settings,
+                [
+                    "videoSettings.video",
+                    "video",
+                    "lastReceived.ChangeVideoSettings.video",
+                ],
+                allow_empty=True,
+            )
+        defaults: Optional[Dict[str, Any]] = None
+        if not isinstance(video, dict):
+            video = {}
+        defaults = self._default_video_reply(mode_defaults)
+        base_video = defaults["video"]
+        base_video.update(video)
+        video = base_video
         has_pushable = False
         if isinstance(video, dict):
             for vcfg in video.values():
@@ -632,47 +686,74 @@ class SettingsHandlers(BaseHandlers):
             **mode_defaults,
         }
 
-        if isinstance(video, dict):
-            mirrored: Dict[str, Dict[str, Any]] = {}
-            for vid, vcfg in video.items():
-                vcfg = vcfg if isinstance(vcfg, dict) else {}
-                with_defaults = {**vcfg, **mode_defaults}
-                if "type" not in with_defaults:
-                    with_defaults["type"] = "h264"
-                mirrored[vid] = with_defaults
-            reply_payload["video"] = mirrored
+        mirrored: Dict[str, Dict[str, Any]] = {}
+        for vid, vcfg in video.items():
+            vcfg = vcfg if isinstance(vcfg, dict) else {}
+            with_defaults = {**vcfg, **mode_defaults}
+            if "type" not in with_defaults:
+                with_defaults["type"] = "h264"
+            mirrored[vid] = with_defaults
+        reply_payload["video"] = mirrored
+        if defaults and "chip" in defaults:
+            reply_payload["chip"] = defaults["chip"]
 
         self._persist_video_settings(payload, reply_payload)
 
         if not has_pushable:
-            if msg.expects_response():
-                out = self.protocol.build_reply(msg, reply_payload)
-                await self.protocol.send(ws, out)
+            out = self.protocol.build_reply(msg, reply_payload)
+            await self.protocol.send(ws, out)
             return
 
         try:
             applied = await self.driver.apply_video_settings(payload)
         except Exception as exc:
             self.log.error("apply_video_settings failed: %s", exc)
-            if msg.expects_response():
-                error_payload = {
-                    "statusCode": 1,
-                    "status": "error",
-                    "deviceID": self._device_id(),
-                }
-                out = self.protocol.build_reply(msg, error_payload)
-                await self.protocol.send(ws, out)
+            error_payload = {
+                "statusCode": 1,
+                "status": "error",
+                "deviceID": self._device_id(),
+            }
+            out = self.protocol.build_reply(msg, error_payload)
+            await self.protocol.send(ws, out)
             return
 
         if applied:
+            applied_video = applied.get("video") if isinstance(applied, dict) else None
+            if isinstance(applied_video, dict):
+                merged_video = reply_payload.get("video") or {}
+                for key, value in applied_video.items():
+                    if isinstance(merged_video.get(key), dict) and isinstance(value, dict):
+                        merged_video[key].update(value)
+                    else:
+                        merged_video[key] = value
+                reply_payload["video"] = merged_video
+                applied = {k: v for k, v in applied.items() if k != "video"}
             reply_payload.update(applied)
 
-        if msg.expects_response():
-            out = self.protocol.build_reply(msg, reply_payload)
-            await self.protocol.send(ws, out)
+        out = self.protocol.build_reply(msg, reply_payload)
+        await self.protocol.send(ws, out)
 
     async def on_change_isp_settings(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
         payload = msg.payload if isinstance(msg.payload, dict) else {}
+        if not payload:
+            cached = _get_setting(
+                self.settings,
+                ["lastReceived.ChangeIspSettings", "ispSettings", "device.ispSettings"],
+                allow_empty=True,
+            )
+            if not isinstance(cached, dict) or not cached:
+                cached = copy.deepcopy(DEFAULT_CHANGE_ISP_PAYLOAD)
+            self._persist_incoming_payload(msg.function_name, cached)
+            if msg.expects_response():
+                out_payload: Dict[str, Any] = {
+                    "statusCode": 0,
+                    "status": "ok",
+                    "deviceID": self._device_id(),
+                }
+                out_payload.update(cached)
+                out = self.protocol.build_reply(msg, out_payload)
+                await self.protocol.send(ws, out)
+            return
         self._persist_incoming_payload(msg.function_name, payload)
         try:
             applied = await self.driver.apply_isp_settings(payload)
@@ -698,6 +779,21 @@ class SettingsHandlers(BaseHandlers):
                 out_payload.update(applied)
             out = self.protocol.build_reply(msg, out_payload)
             await self.protocol.send(ws, out)
+
+    async def on_update_firmware_request(self, ws: WebSocketClientProtocol, msg: ControllerMessage):
+        incoming = msg.payload if isinstance(msg.payload, dict) else {}
+        self._persist_incoming_payload(msg.function_name, incoming)
+        if msg.expects_response():
+            await self._reply_ok(ws, msg, incoming)
+
+        await self._send_firmware_status(ws, "FW_DOWNLOADING")
+        await asyncio.sleep(5)
+        await self._send_firmware_status(ws, "FW_UPDATING")
+        await asyncio.sleep(5)
+        try:
+            await ws.close(code=1012, reason="rebooting")
+        except Exception as exc:
+            self.log.debug("Firmware reboot close failed: %s", exc)
 
     def _persist_video_settings(self, payload: Dict[str, Any], reply_payload: Dict[str, Any]) -> None:
         stored: Dict[str, Any] = {
@@ -729,6 +825,62 @@ class SettingsHandlers(BaseHandlers):
             self.log.warning("ChangeVideoSettings payload type=%s; using {}", type(payload).__name__)
             payload = {}
         return payload
+
+    def _default_video_reply(self, mode_defaults: Dict[str, Any]) -> Dict[str, Any]:
+        hi, mid, lo = self._default_video_dims()
+        def _entry(width: int, height: int, stream_id: int) -> Dict[str, Any]:
+            return {
+                "type": "h264",
+                "width": width,
+                "height": height,
+                "fps": 24,
+                "streamId": stream_id,
+                "streamOrdinal": stream_id,
+                **mode_defaults,
+            }
+        video = {
+            "video1": _entry(hi[0], hi[1], 0),
+            "video2": _entry(lo[0], lo[1], 1),
+            "video3": _entry(mid[0], mid[1], 2),
+        }
+        return {"video": video, "chip": self._default_chip(mode_defaults)}
+
+    def _default_video_dims(self) -> Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]:
+        dims = []
+        streams = _get_setting(self.settings, ["streams"], allow_empty=True)
+        if isinstance(streams, dict):
+            for stream in streams.values():
+                if not isinstance(stream, dict):
+                    continue
+                width = stream.get("width")
+                height = stream.get("height")
+                if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
+                    dims.append((width, height))
+        if dims:
+            dims = sorted(dims, key=lambda wh: wh[0] * wh[1])
+            lo = dims[0]
+            hi = dims[-1]
+            mid = dims[len(dims) // 2]
+            return hi, mid, lo
+        return (1920, 1080), (1280, 720), (640, 360)
+
+    def _default_chip(self, mode_defaults: Dict[str, Any]) -> Dict[str, Any]:
+        hi, _, _ = self._default_video_dims()
+        return {
+            "common": {"vsync_detection_disable": 0},
+            "debug": {"check_disable": 0},
+            "vin0": {
+                "description": "Input src 0",
+                "enabled": True,
+                "hdrMode": 1,
+                "height": hi[1],
+                "width": hi[0],
+                "videoMode": mode_defaults.get("videoMode", "default"),
+                "vinFps": 24,
+                "vsrcCtxSwitch": 0,
+                "vsrcId": 0,
+            },
+        }
 
 
 class SnapshotHandlers(BaseHandlers):
@@ -952,6 +1104,7 @@ def build_handler_registry(settings, driver, logger: logging.Logger, protocol: "
 
     reg.register("ubnt_avclient_paramAgreement", maint.on_param_agreement)
     reg.register("ubnt_avclient_timeSync", maint.on_time_sync)
+    reg.register("EventPoorNetwork", maint.on_event_poor_network)
     reg.register("GetSystemStats", maint.on_get_system_stats)
     reg.register("NetworkStatus", maint.on_network_status)
     reg.register("StopService", maint.on_stop_service)
@@ -959,6 +1112,7 @@ def build_handler_registry(settings, driver, logger: logging.Logger, protocol: "
 
     reg.register("ChangeVideoSettings", sets.on_change_video_settings)
     reg.register("ChangeIspSettings", sets.on_change_isp_settings)
+    reg.register("ChangeAudioEventsSettings", sets.on_change_audio_events_settings)
     reg.register("ChangeOsdSettings", sets.on_change_osd_settings)
     reg.register("ChangeSoundLedSettings", sets.on_change_sound_led_settings)
     reg.register("ChangeTalkbackSettings", sets.on_change_talkback_settings)
@@ -967,6 +1121,7 @@ def build_handler_registry(settings, driver, logger: logging.Logger, protocol: "
     reg.register("UpdateUsernamePassword", sets.on_update_username_password)
     reg.register("ChangeClarityZones", sets.on_change_clarity_zones)
     reg.register("AudioAgentChangeTuning", sets.on_audio_agent_change_tuning)
+    reg.register("UpdateFirmwareRequest", sets.on_update_firmware_request)
 
     reg.register("GetRequest", snap.on_get_request)
 
@@ -987,6 +1142,8 @@ class WssProtocol:
         settings,
         driver,
         logger: logging.Logger,
+        tcp_in_log: logging.Logger | None,
+        tcp_out_log: logging.Logger | None,
         config: WssConfig,
         log_filter: LogFilter,
         capture: MessageCapture,
@@ -994,45 +1151,131 @@ class WssProtocol:
         self.settings = settings
         self.driver = driver
         self.log = logger
+        self.tcp_in_log = tcp_in_log
+        self.tcp_out_log = tcp_out_log
         self.config = config
         self.log_filter = log_filter
         self.capture = capture
         self._msg_id = 0
+        self.minimal_mode = bool(_get_setting(settings, ["wss.minimalMode", "minimalMode"]))
+        self._raw_dump_path: Path | None = None
+        self._raw_dump_fp = None
         self.handlers = build_handler_registry(settings, driver, logger, self)
 
     def _next_msg_id(self) -> int:
         self._msg_id += 1
         return self._msg_id
 
+    def reset_msg_id(self, start_at: int = 0) -> None:
+        self._msg_id = start_at
+
     def build_reply(self, in_msg: ControllerMessage, payload: Dict[str, Any]) -> CameraMessage:
         return CameraMessage.reply_to(in_msg, self._next_msg_id(), payload)
+
+    def start_raw_dump(self, path: Path | None) -> None:
+        if not path:
+            return
+        if self._raw_dump_fp:
+            try:
+                self._raw_dump_fp.close()
+            except Exception:
+                pass
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._raw_dump_path = path
+        self._raw_dump_fp = path.open("w", encoding="utf-8")
+
+    def stop_raw_dump(self) -> None:
+        if not self._raw_dump_fp:
+            return
+        try:
+            self._raw_dump_fp.close()
+        except Exception:
+            pass
+        self._raw_dump_fp = None
+
+    def _raw_dump(self, direction: Direction, raw: str) -> None:
+        if not self._raw_dump_fp:
+            return
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "dir": direction.value,
+            "raw": raw,
+        }
+        try:
+            self._raw_dump_fp.write(json.dumps(entry, ensure_ascii=True) + "\n")
+            self._raw_dump_fp.flush()
+        except Exception:
+            pass
 
     async def send(self, ws: WebSocketClientProtocol, msg: CameraMessage) -> None:
         raw = msg.to_json()
         self.log_filter.log(self.log, Direction.TX, msg.function_name, raw)
+        self._raw_dump(Direction.TX, raw)
+        if self.tcp_out_log:
+            self.tcp_out_log.debug(raw)
         await ws.send(raw)
 
     async def send_hello(self, ws: WebSocketClientProtocol) -> None:
-        cam_ip = self.settings.get("host")
-        mgmt_host = self.settings.get("mgmt.connectionHost") or f"{cam_ip}:7442"
+        if self.minimal_mode:
+            cam_ip = _get_setting(self.settings, ["device.host", "host"], allow_empty=True) or ""
+            payload = {
+                "fwVersion": _get_setting(self.settings, ["device.firmwareVersion", "firmwareVersion"], allow_empty=True)
+                or "",
+                "ip": cam_ip,
+                "uptime": int(_get_setting(self.settings, ["runtime.uptime", "uptime"], allow_empty=True) or 0),
+                "connectionHost": cam_ip,
+                "connectionSecurePort": 7442,
+                "protocolVersion": 1,
+            }
+            msg = CameraMessage(
+                function_name="ubnt_avclient_hello",
+                message_id=self._next_msg_id(),
+                in_response_to=0,
+                payload=payload,
+            )
+            await self.send(ws, msg)
+            return
+        cam_ip = _get_setting(self.settings, ["device.host", "host"], allow_empty=True) or ""
+        mgmt_host = _get_setting(
+            self.settings,
+            ["management.connectionHost", "mgmt.connectionHost", "wss.connectionHost", "connectionHost"],
+            allow_empty=True,
+        ) or (f"{cam_ip}:7442" if cam_ip else "")
         host_only, port = _parse_hostport(str(mgmt_host))
-        features = copy.deepcopy(self.settings.get("features") or HELLO_FEATURES)
+        features = copy.deepcopy(
+            _get_setting(self.settings, ["device.features", "features", "capabilities.features", "capabilities"], allow_empty=True)
+            or {}
+        )
+        protocol_version = _get_setting(self.settings, ["device.protocolVersion", "protocolVersion"], allow_empty=True) or 67
+        reboot_timeout = _get_setting(self.settings, ["wss.rebootTimeoutSec", "rebootTimeoutSec"], allow_empty=True) or 30
+        upgrade_timeout = _get_setting(self.settings, ["wss.upgradeTimeoutSec", "upgradeTimeoutSec"], allow_empty=True) or 150
+        firmware_version = _get_setting(self.settings, ["device.firmwareVersion", "firmwareVersion"], allow_empty=True) or "v5.0.129"
+        semver = (
+            _get_setting(self.settings, ["device.semver", "semver"], allow_empty=True)
+            or _extract_semver(firmware_version)
+            or firmware_version
+        )
+        fw_version_payload = _semver_safe_fw_version(firmware_version, semver)
+        model = _get_setting(self.settings, ["device.model", "device.marketName", "type", "marketName"], allow_empty=True) or "UVC Camera"
+        name = _get_setting(self.settings, ["device.name", "name", "device.model", "type"], allow_empty=True) or (model or "Camera")
+        mac_raw = str(_get_setting(self.settings, ["device.mac", "mac"], allow_empty=True) or "")
+        mac_compact = re.sub(r"[^0-9A-Fa-f]", "", mac_raw).upper()
         payload = {
-            "adoptionCode": self.settings.get("adoptionCode", ""),
+            "adoptionCode": _get_setting(self.settings, ["wss.adoptionCode", "adoptionCode"], allow_empty=True) or "",
             "connectionHost": host_only,
             "connectionSecurePort": port,
             "features": features,
-            "fwVersion": self.settings.get("firmwareVersion", "v5.0.129"),
-            "semver": self.settings.get("firmwareVersion", "v5.0.129"),
-            "hwrev": int(self.settings.get("hwrev", 10)),
+            "fwVersion": fw_version_payload,
+            "semver": semver,
+            "hwrev": int(_get_setting(self.settings, ["device.hwrev", "hwrev"], allow_empty=True) or 10),
             "ip": cam_ip,
-            "mac": (self.settings.get("mac") or "").upper(),
-            "model": self.settings.get("type") or self.settings.get("marketName") or "UVC Camera",
-            "name": self.settings.get("name") or (self.settings.get("type") or "Camera"),
-            "protocolVersion": int(self.settings.get("protocolVersion", HELLO_PROTOCOL_VERSION)),
-            "rebootTimeoutSec": int(self.settings.get("rebootTimeoutSec", HELLO_REBOOT_TIMEOUT_SEC)),
-            "upgradeTimeoutSec": int(self.settings.get("upgradeTimeoutSec", HELLO_UPGRADE_TIMEOUT_SEC)),
-            "uptime": int(self.settings.get("uptime", 0) or 0),
+            "mac": mac_compact,
+            "model": model,
+            "name": name,
+            "protocolVersion": int(protocol_version),
+            "rebootTimeoutSec": int(reboot_timeout),
+            "upgradeTimeoutSec": int(upgrade_timeout),
+            "uptime": int(_get_setting(self.settings, ["runtime.uptime", "uptime"], allow_empty=True) or 0),
         }
         msg = CameraMessage(
             function_name="ubnt_avclient_hello",
@@ -1049,6 +1292,8 @@ class WssProtocol:
                 raw = incoming.decode("utf-8")
             except Exception:
                 self.log_filter.log(self.log, Direction.RX, "", f"(binary {len(incoming)} bytes)")
+                if self.tcp_in_log:
+                    self.tcp_in_log.debug(f"(binary {len(incoming)} bytes)")
                 return
         if not isinstance(raw, str):
             return
@@ -1056,9 +1301,15 @@ class WssProtocol:
             msg = ControllerMessage.from_json(raw)
         except Exception:
             self.log_filter.log(self.log, Direction.RX, "", raw[:200])
+            if self.tcp_in_log:
+                self.tcp_in_log.debug(raw)
+            self._raw_dump(Direction.RX, raw)
             return
 
+        if self.tcp_in_log:
+            self.tcp_in_log.debug(raw)
         self.log_filter.log(self.log, Direction.RX, msg.function_name, raw)
+        self._raw_dump(Direction.RX, raw)
         validate_message_schema(msg, self.log)
         self.capture.maybe_record(msg)
 
@@ -1095,6 +1346,8 @@ class WssManager(threading.Thread):
         token_event: threading.Event,
         stop_event: threading.Event,
         logger: logging.Logger,
+        tcp_in_log: logging.Logger | None = None,
+        tcp_out_log: logging.Logger | None = None,
         driver=None,
     ):
         super().__init__(daemon=True, name="WSSManager")
@@ -1102,6 +1355,8 @@ class WssManager(threading.Thread):
         self.token_event = token_event
         self.stop_event = stop_event
         self.log = logger
+        self.tcp_in_log = tcp_in_log
+        self.tcp_out_log = tcp_out_log
         self.driver = driver or build_camera_driver(settings, logger)
         self.config = WssConfig.from_env()
         self.log.info(
@@ -1117,13 +1372,22 @@ class WssManager(threading.Thread):
         )
         self.log_filter = LogFilter(self.config)
         capture = MessageCapture(self.config, logger)
-        self.protocol = WssProtocol(settings, self.driver, logger, self.config, self.log_filter, capture)
+        self.protocol = WssProtocol(
+            settings,
+            self.driver,
+            logger,
+            self.tcp_in_log,
+            self.tcp_out_log,
+            self.config,
+            self.log_filter,
+            capture,
+        )
 
     def run(self):
         current_key: Optional[Tuple[str, int, str]] = None
         while not self.stop_event.is_set():
-            token = self.settings.get("mgmt.token")
-            hostport = self.settings.get("mgmt.connectionHost")
+            token = _get_setting(self.settings, ["management.token", "mgmt.token"])
+            hostport = _get_setting(self.settings, ["management.connectionHost", "mgmt.connectionHost"])
             if not token or not hostport:
                 self.log.debug("WSS: waiting for token/host...")
                 self.token_event.wait(timeout=10)
@@ -1157,8 +1421,8 @@ class WssManager(threading.Thread):
                 self.log.warning("WSS: could not load client cert/key: %s", exc)
 
         headers = {
-            "Camera-Mac": (self.settings.get("mac") or "").lower(),
-            "Camera-Model": self.settings.get("sysid") or "0xa573",
+            "Camera-Mac": str(_require_setting(self.settings, ["device.mac", "mac"], "device.mac")).lower().replace(":", ""),
+            "Camera-Model": _require_setting(self.settings, ["device.sysid", "sysid"], "device.sysid"),
         }
 
         kwargs = dict(ssl=ssl_ctx, additional_headers=headers)
@@ -1168,16 +1432,29 @@ class WssManager(threading.Thread):
         self.log.info("WSS: connecting to controller")
         self.log.debug("WSS: URL=%s subprotocols=%s headers=%s", url, kwargs.get("subprotocols"), headers)
 
-        async with websockets.connect(url, **kwargs) as ws:
-            self.log.info("WSS: connected (agreed subprotocol=%s)", ws.subprotocol)
-            try:
-                self.log.debug("WSS: response headers: %s", dict(ws.response_headers))
-            except Exception:
-                pass
-            await self._serve_loop(ws)
+        raw_path = _get_setting(self.settings, ["wss.rawDumpFile", "rawDumpFile"], allow_empty=True)
+        if raw_path:
+            raw_path = Path(str(raw_path))
+        else:
+            mac = str(_require_setting(self.settings, ["device.mac", "mac"], "device.mac"))
+            suffix = mac.replace(":", "").upper() or "UNKNOWN"
+            raw_path = Path("logs") / f"wss_raw_{suffix}.ndjson"
+        self.protocol.start_raw_dump(raw_path)
+        try:
+            async with websockets.connect(url, **kwargs) as ws:
+                self.log.info("WSS: connected (agreed subprotocol=%s)", ws.subprotocol)
+                try:
+                    self.log.debug("WSS: response headers: %s", dict(ws.response_headers))
+                except Exception:
+                    pass
+                await self._serve_loop(ws)
+        finally:
+            self.protocol.stop_raw_dump()
 
     async def _serve_loop(self, ws: WebSocketClientProtocol):
-        await self.protocol.send_hello(ws)
+        if not _get_setting(self.settings, ["wss.skipHello", "skipHello"]):
+            self.protocol.reset_msg_id(-1)
+            await self.protocol.send_hello(ws)
         try:
             async for incoming in ws:
                 await self.protocol.handle_rx(ws, incoming)

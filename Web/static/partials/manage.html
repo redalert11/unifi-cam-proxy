@@ -1,0 +1,59 @@
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center mb-3 border-bottom">
+  <h1 class="h4">Cameras</h1>
+  <span class="badge text-bg-primary">Manage</span>
+</div>
+
+<p class="text-muted small mb-2">
+  Start a camera to run discovery (if needed) and launch the UniFi services for that camera.
+</p>
+
+<div class="d-flex flex-wrap gap-3 small text-muted mb-3" id="manageSummary"></div>
+<div class="small mb-3" id="manageMsg"></div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-header d-flex align-items-center gap-2">
+    <i class="bi bi-sliders"></i>
+    <span class="fw-semibold">Adoption Services</span>
+  </div>
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small mb-1">Adoption camera</label>
+        <select class="form-select form-select-sm" id="manageAdoptionCamera"></select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label small mb-1">Discovery</label>
+        <div class="d-flex gap-2 align-items-center">
+          <span class="badge text-bg-secondary" id="manageDiscoveryStatus">idle</span>
+          <button class="btn btn-sm btn-outline-primary" id="manageDiscoveryStart"><i class="bi bi-play-fill me-1"></i>Start</button>
+          <button class="btn btn-sm btn-outline-secondary" id="manageDiscoveryStop"><i class="bi bi-stop-fill me-1"></i>Stop</button>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label small mb-1">API Server</label>
+        <div class="d-flex gap-2 align-items-center">
+          <span class="badge text-bg-secondary" id="manageApiStatus">stopped</span>
+          <button class="btn btn-sm btn-outline-primary" id="manageApiStart"><i class="bi bi-play-fill me-1"></i>Start</button>
+          <button class="btn btn-sm btn-outline-secondary" id="manageApiStop"><i class="bi bi-stop-fill me-1"></i>Stop</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th>Camera</th>
+        <th>Model</th>
+        <th>MAC</th>
+        <th>IP</th>
+        <th>Adoption</th>
+        <th>WSS</th>
+        <th class="text-end">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="manageCameraTable"></tbody>
+  </table>
+</div>

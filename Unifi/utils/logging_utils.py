@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 from collections import deque
 from logging.handlers import RotatingFileHandler
@@ -29,38 +28,40 @@ class InMemoryLogHandler(logging.Handler):
 
 def _build_formatter():
     return logging.Formatter(
-        "%(asctime)s [%(threadName)s] [%(levelname)s] %(name)s: %(message)s",
-        "%Y-%m-%d %H:%M:%S",
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        "%H:%M:%S",
     )
 
 def _maybe_get_buffer_size(buffer_size: Optional[int]) -> int:
     if buffer_size is not None:
         return buffer_size
-    try:
-        return int(os.getenv("LOG_BUFFER_SIZE", "500") or 0)
-    except ValueError:
-        return 500
+    return 500
 
 
 def _file_logging_enabled(enable_file: Optional[bool]) -> bool:
     if enable_file is not None:
         return enable_file
-    env = os.getenv("LOG_FILE_ENABLED", "").strip().lower()
-    if env in {"0", "false", "no"}:
-        return False
-    if env in {"1", "true", "yes"}:
-        return True
     return True  # default: on
 
 
-def get_log_buffer(name: str) -> List[str]:
+def get_log_buffer(name: str, max_lines: Optional[int] = None) -> List[str]:
     """
     Return a copy of the recent log lines for the given logger name.
     """
     buf = _LOG_BUFFERS.get(name)
     if not buf:
         return []
-    return list(buf)
+    lines = list(buf)
+    if max_lines is not None and max_lines > 0:
+        return lines[-max_lines:]
+    return lines
+
+
+def list_log_sources(prefix: Optional[str] = None) -> List[str]:
+    sources = sorted(_LOG_BUFFERS.keys())
+    if prefix:
+        return [s for s in sources if s.startswith(prefix)]
+    return sources
 
 
 def setup_logger(
@@ -75,18 +76,17 @@ def setup_logger(
     """
     Create or retrieve a logger with the specified name and level.
     Adds an in-memory buffer (deque) for quick access, and only writes to a file
-    if enable_file is True or LOG_FILE_ENABLED env var is set.
+    if enable_file is True.
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
     formatter = _build_formatter()
 
-    # Attach stdout handler once
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+    # Remove any existing stdout/stderr handlers to keep logs in the web UI only.
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            logger.removeHandler(handler)
 
     # Attach in-memory buffer handler (if not already)
     buf_size = _maybe_get_buffer_size(buffer_size)
@@ -103,9 +103,8 @@ def setup_logger(
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-    root_logger = logging.getLogger()
-    if logger is not root_logger and root_logger.handlers:
-        logger.propagate = True
+    # Avoid duplicate console output via root handlers.
+    logger.propagate = False
 
     return logger
 

@@ -19,14 +19,12 @@ class ApiService:
         settings: CameraSettings,
         logger: logging.Logger,
         token_event,
-        driver=None,
         port: int = 443,
         use_ssl: bool = True,
     ) -> None:
         self.settings = settings
         self.logger = logger
         self.token_event = token_event
-        self.driver = driver
         self.port = port
         self.use_ssl = use_ssl
         self.server: Optional[VerboseAPIServer] = None
@@ -40,7 +38,6 @@ class ApiService:
             settings=self.settings,
             logger=self.logger,
             token_event=self.token_event,
-            driver=self.driver,
         )
         self.server.start()
         self.logger.info("HTTPS API server started on port %s", self.port)

@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -8,23 +7,10 @@ import subprocess
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Optional, Tuple
+from typing import Optional
 
 from Unifi.utils.logging_utils import setup_logger
 from Unifi.camera_data.camera_settings import CameraSettings
-
-# Global WSS thread reference
-wss_task: Optional[threading.Thread] = None
-
-
-def start_wss(host: str, port: int, token: str, settings: CameraSettings):
-    """
-    Placeholder for your actual WSS connection logic.
-    Replace with real implementation.
-    """
-    print(f"[WSS] Starting WebSocket to {host}:{port} with token {token}...")
-    # TODO: implement your websocket client here
-
 
 class VerboseAPIServer:
     def __init__(
@@ -36,14 +22,12 @@ class VerboseAPIServer:
         settings: Optional[CameraSettings] = None,
         logger: Optional[logging.Logger] = None,
         token_event: threading.Event | None = None,
-        driver=None,
     ):
         self.port = port
         self.use_ssl = use_ssl
         self.certfile = certfile
         self.keyfile = keyfile
         self.token_event = token_event
-        self.driver = driver
         # If no logger provided, default to DEBUG so you see request logs
         self.logger = logger or setup_logger("api_https", logging.DEBUG)
 
@@ -74,31 +58,6 @@ class VerboseAPIServer:
             self.log = api_server.logger
             super().__init__(request, client_address, server)
 
-        @staticmethod
-        def _jpeg_dimensions(data: bytes) -> Tuple[Optional[int], Optional[int]]:
-            if len(data) < 4 or data[0] != 0xFF or data[1] != 0xD8:
-                return (None, None)
-            i = 2
-            while i + 3 < len(data):
-                if data[i] != 0xFF:
-                    i += 1
-                    continue
-                marker = data[i + 1]
-                i += 2
-                if marker in (0xD8, 0xD9):
-                    continue
-                if i + 1 >= len(data):
-                    break
-                seglen = (data[i] << 8) | data[i + 1]
-                if seglen < 2 or i + seglen > len(data):
-                    break
-                if 0xC0 <= marker <= 0xC3 and seglen >= 7:
-                    height = (data[i + 3] << 8) | data[i + 4]
-                    width = (data[i + 5] << 8) | data[i + 6]
-                    return (width, height)
-                i += seglen
-            return (None, None)
-
         # ----------------- helpers -----------------
 
         def _send_json(self, data, status: int = 200, headers: Optional[dict] = None):
@@ -122,10 +81,26 @@ class VerboseAPIServer:
                 return b""
             return self.rfile.read(length)
 
-        def log_request_info(self):
-            self.log.info("📌 Incoming Request Headers:")
-            for k, v in self.headers.items():
-                self.log.info("  %s: %s", k, v)
+        @staticmethod
+        def _obfuscate_payload(payload):
+            return payload
+
+        @staticmethod
+        def _compact_json(payload) -> str:
+            try:
+                return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+            except Exception:
+                return str(payload)
+
+        def _log_rx(self, path: str, payload):
+            safe = self._obfuscate_payload(payload)
+            body = self._compact_json(safe)
+            self.log.info("RX %s ip=%s body=%s", path, self.client_address[0], body)
+
+        def _log_tx(self, path: str, status: int, payload):
+            safe = self._obfuscate_payload(payload)
+            body = self._compact_json(safe)
+            self.log.info("TX %s status=%s body=%s", path, status, body)
 
         @staticmethod
         def now_local_iso():
@@ -147,12 +122,11 @@ class VerboseAPIServer:
                 self._handle_login_post()
                 return
             if self.path == "/api/1.2/snapshot":
-                self._serve_snapshot()
+                self._send_json({"error": "Not Found"}, 404)
                 return
             self._send_json({"error": "Not Found"}, 404)
 
         def _handle_manage_post(self):
-            self.log_request_info()
             body = self._read_body()
 
             try:
@@ -161,8 +135,7 @@ class VerboseAPIServer:
                 self._send_json({"error": "Invalid JSON body"}, 400)
                 return
 
-            self.log.info("📥 Incoming Request Body:")
-            self.log.info(json.dumps(data, indent=2))
+            self._log_rx(self.path, data)
 
             mgmt = data.get("mgmt", {}) or {}
             token = mgmt.get("token")
@@ -183,8 +156,6 @@ class VerboseAPIServer:
                 host = controller_host
                 port = 7442
 
-            self.log.info("🔗 Controller Host: %s:%s", host, port)
-
             dt, tz_name = self.now_local_iso()
 
             # First-time provision vs subsequent refresh
@@ -203,6 +174,7 @@ class VerboseAPIServer:
                     "mgmt.tokenUpdatedAt": dt.isoformat(timespec="seconds"),
                     "mgmt.timezone": tz_name,
                     "mgmt.initialized": True,
+                    "mgmt.lastAdoptedAt": dt.isoformat(timespec="seconds"),
                     "canAdopt": False,
                 })
             else:
@@ -210,6 +182,7 @@ class VerboseAPIServer:
                 self.api_server.settings.update({
                     "mgmt.token": token,
                     "mgmt.tokenUpdatedAt": dt.isoformat(timespec="seconds"),
+                    "mgmt.lastAdoptedAt": dt.isoformat(timespec="seconds"),
                 })
                 # Optional: if controller host changed, log it but don't overwrite
                 saved_host = self.api_server.settings.get("mgmt.connectionHost")
@@ -221,16 +194,7 @@ class VerboseAPIServer:
             if self.api_server.token_event:
                 self.api_server.token_event.set()
 
-            # Start WSS once (or let your WssManager react to token_event)
-            global wss_task
-            if wss_task is None or not wss_task.is_alive():
-                wss_task = threading.Thread(
-                    target=start_wss,
-                    args=(host, port, token, self.api_server.settings),
-                    daemon=True,
-                    name="WSSHandshake",
-                )
-                wss_task.start()
+            # WSS startup is controlled by the runtime; token_event is enough.
 
             # Build response (prefer saved connection host)
             s = self.api_server.settings
@@ -245,12 +209,10 @@ class VerboseAPIServer:
                 "services": {"https": 443, "wss": 7442},
             }
 
-            self.log.info("📤 Response:")
-            self.log.info(json.dumps(resp, indent=2))
+            self._log_tx(self.path, 200, resp)
             self._send_json(resp, 200)
 
         def _handle_login_post(self):
-            self.log_request_info()
             body = self._read_body()
             parsed = {}
             if body:
@@ -259,51 +221,17 @@ class VerboseAPIServer:
                 except Exception:
                     self.log.debug("Login payload not JSON (len=%d)", len(body))
             if parsed:
-                self.log.info("🔐 Login payload: %s", json.dumps(parsed, indent=2))
+                self._log_rx(self.path, parsed)
             cookie_val = secrets.token_hex(16)
             self.api_server._last_session_cookie = cookie_val
             headers = {"Set-Cookie": f"TOKEN={cookie_val}; Path=/; HttpOnly"}
             resp = {"status": "ok", "uniqueId": self.api_server.settings.get("mac") or ""}
+            self._log_tx(self.path, 200, resp)
             self._send_json(resp, 200, headers=headers)
-
-        def _serve_snapshot(self):
-            driver = self.api_server.driver
-            if driver is None:
-                self._send_json({"error": "snapshot driver unavailable"}, 503)
-                return
-
-            parsed_path = self.path.split("?", 1)[0]
-            self.log.info("📸 Snapshot request via %s", parsed_path)
-
-            try:
-                jpeg = asyncio.run(driver.get_snapshot_jpeg(timeout_s=3))
-            except Exception as exc:
-                self.log.error("Snapshot capture failed: %s", exc)
-                self._send_json({"error": "snapshot capture failed"}, 500)
-                return
-            width, height = self._jpeg_dimensions(jpeg)
-            self.log.info(
-                "📸 Snapshot ready bytes=%d dims=%sx%s (fallback HTTP)",
-                len(jpeg),
-                width or "?",
-                height or "?",
-            )
-
-            self.send_response(200)
-            self.send_header("Content-Type", "image/jpeg")
-            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            if width:
-                self.send_header("X-Image-Width", str(width))
-            if height:
-                self.send_header("X-Image-Height", str(height))
-            self.send_header("Content-Length", str(len(jpeg)))
-            self.end_headers()
-            self.wfile.write(jpeg)
 
         def do_GET(self):
             if self.path.startswith("/api/1.2/snapshot"):
-                self._serve_snapshot()
+                self._send_json({"error": "Not Found"}, 404)
                 return
             s = self.api_server.settings
             self._send_json(

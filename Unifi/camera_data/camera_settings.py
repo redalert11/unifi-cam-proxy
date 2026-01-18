@@ -1,6 +1,5 @@
 import logging
 import json
-import os
 import socket
 import sys
 import urllib.request
@@ -22,12 +21,14 @@ class CameraSettings:
         self.logger = logger or logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
         self.settings_file = Path(settings_file or (Path(__file__).parent / "settings.json")).resolve()
+        is_new_file = not self.settings_file.exists()
         self.store = SettingsManager(self.settings_file, defaults=self._default_settings())
+        self._volatile = {}
 
         self._ensure_platform_and_sysid()
         self._get_ip_address()
-        status = os.environ.get("FIRMWARE_STATUS", "GA")  # GA | RC | EA | ALL
-        self._update_latest_firmware_version(status=status)
+        if is_new_file:
+            self._update_latest_firmware_version(status="GA")
 
     def _load_or_initialize(self):
         # Legacy compatibility: retained for callers, delegates to store
@@ -37,12 +38,8 @@ class CameraSettings:
         changed = False
         market = self.store.get("device.marketName")
         if not market:
-            model = os.environ.get("CAMERA_MODEL", "").strip()
-            if not model:
-                self.logger.error("CAMERA_MODEL environment variable is required to set type or platform.")
-                sys.exit(1)
-            changed |= self.store._set_nested("device.marketName", model)
-            market = model
+            self.logger.error("device.marketName is required in settings to set type or platform.")
+            sys.exit(1)
 
         if not self.store.get("device.platform"):
             platform = CameraModelDatabase.get_platform(market)
@@ -78,6 +75,7 @@ class CameraSettings:
                 self.logger.error(f"Failed to get IP address: {e}")
                 sys.exit(1)
 
+
     def _update_latest_firmware_version(self, status="GA"):
         """Set settings['firmwareVersion'] to the latest version string (e.g., '5.1.34')."""
         info = self._fetch_latest_camera_firmware_api(status=status)
@@ -93,6 +91,15 @@ class CameraSettings:
         except Exception:
             return False
         return False
+
+    @classmethod
+    def fetch_latest_firmware_version(cls, status="GA", logger=None) -> str:
+        temp = cls.__new__(cls)
+        temp.logger = logger or logging.getLogger(__name__)
+        info = temp._fetch_latest_camera_firmware_api(status=status)
+        if not info or not info.get("version"):
+            return ""
+        return str(info["version"])
 
     def _fetch_latest_camera_firmware_api(self, status="GA", limit=10, timeout=5.0):
         """Return {'version','url','stage'} for latest Protect *Cameras* release, preferring `status` stage."""
@@ -257,6 +264,19 @@ class CameraSettings:
         return legacy_map.get(key, key)
 
     @staticmethod
+    def _is_volatile_key(key: str) -> bool:
+        return key in {
+            "uptime",
+            "upSince",
+            "lastSeen",
+            "connectedSince",
+            "runtime.uptime",
+            "runtime.upSince",
+            "runtime.lastSeen",
+            "runtime.connectedSince",
+        }
+
+    @staticmethod
     def format_model_display(market_name: str) -> str:
         if not market_name:
             return ""
@@ -286,6 +306,7 @@ class CameraSettings:
         firmware_version: str = "",
         hwrev: int = 10,
         protocol_version: int = 67,
+        features: dict | None = None,
     ) -> dict:
         if not market_name:
             raise ValueError("market_name is required")
@@ -305,6 +326,7 @@ class CameraSettings:
             "hwrev": hwrev,
             "protocolVersion": protocol_version,
             "semver": cls._extract_semver(firmware_version),
+            "features": features or {},
         }
 
     @classmethod
@@ -315,12 +337,14 @@ class CameraSettings:
         host: str = "",
         firmware_version: str = "",
         streams: dict | None = None,
+        features: dict | None = None,
     ) -> dict:
         device = cls.build_device_block(
             market_name=market_name,
             mac=mac,
             host=host,
             firmware_version=firmware_version,
+            features=features,
         )
         return {
             "configVersion": "1.00",
@@ -331,8 +355,14 @@ class CameraSettings:
             },
             "capabilities": {},
             "streams": streams or {},
-            "wss": {},
-            "runtime": {},
+            "wss": {
+                "adoptionCode": "",
+                "rebootTimeoutSec": 30,
+                "upgradeTimeoutSec": 150,
+            },
+            "runtime": {
+                "uptime": 0,
+            },
         }
 
     def __getitem__(self, key):
@@ -343,6 +373,8 @@ class CameraSettings:
             mac = settings["uplinkDevice.mac"]
         """
         key = self._normalize_key(key)
+        if self._is_volatile_key(key):
+            return self._volatile.get(key, 0)
         value = self.store.get(key, default=None)
         if value is None and not self.__contains__(key):
             raise KeyError(key)
@@ -356,6 +388,9 @@ class CameraSettings:
             settings["uplinkDevice.mac"] = "00:11:22:33:44:55"
         """
         key = self._normalize_key(key)
+        if self._is_volatile_key(key):
+            self._volatile[key] = value
+            return
         if key == "management.initialized" and isinstance(value, bool):
             # nothing special; allow direct write
             pass
@@ -370,6 +405,8 @@ class CameraSettings:
                 ...
         """
         key = self._normalize_key(key)
+        if self._is_volatile_key(key):
+            return key in self._volatile
         return self.store.get(key, default=None) is not None
 
     def get(self, key, default=None):
@@ -385,6 +422,8 @@ class CameraSettings:
                 return bool(stored)
             return not bool(self.store.get("management.initialized", False))
         key = self._normalize_key(key)
+        if self._is_volatile_key(key) and key in self._volatile:
+            return self._volatile[key]
         return self.store.get(key, default)
 
     def update(self, updates: dict):
@@ -399,9 +438,12 @@ class CameraSettings:
             })
         """
         normalized = {self._normalize_key(k): v for k, v in updates.items()}
+        for k, v in list(normalized.items()):
+            if self._is_volatile_key(k):
+                self._volatile[k] = v
+                normalized.pop(k, None)
         if "canAdopt" in updates:
             normalized["management.canAdopt"] = bool(updates["canAdopt"])
-            normalized["management.initialized"] = not bool(updates["canAdopt"])
         self.store.update(normalized)
 
     def mac_bytes(self, key="mac"):
@@ -413,7 +455,10 @@ class CameraSettings:
             settings.mac_bytes("mac")
             settings.mac_bytes("uplinkDevice.mac")
         """
-        mac_str = self.store.get(key)
+        normalized = self._normalize_key(key)
+        mac_str = self.store.get(normalized)
+        if not mac_str and normalized == "mac":
+            mac_str = self.store.get("device.mac")
         if not mac_str:
             raise RuntimeError("MAC address is missing in settings.")
         try:
@@ -430,7 +475,10 @@ class CameraSettings:
             settings.ip_bytes("host")
             settings.ip_bytes("wifiConnectionState.apMgmtIp")
         """
-        ip_str = self.store.get(key)
+        normalized = self._normalize_key(key)
+        ip_str = self.store.get(normalized)
+        if not ip_str and normalized == "host":
+            ip_str = self.store.get("device.host")
         if not ip_str:
             raise RuntimeError("IP address is missing in settings.")
         try:
